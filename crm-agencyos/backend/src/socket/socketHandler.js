@@ -1,6 +1,7 @@
 const jwt  = require('jsonwebtoken');
 const User = require('../models/User');
 const { Channel, Task, Project } = require('../models/index');
+const { getChannelAccess } = require('../utils/channelAccess');
 
 const disconnectTimeouts = new Map();
 
@@ -132,12 +133,17 @@ module.exports = (io) => {
     };
 
     // ── Join rooms ────────────────────────────────────────
-    socket.on('join:thread', (threadId) => {
+    socket.on('join:thread', async (threadId) => {
       const room = getCanonicalRoom(threadId, socket.user);
       // For clients: only join DM rooms they're already authorised for (joined at connect time)
       if (socket.user.role === 'client' && room.startsWith('dm-') && !socket.rooms.has(room)) {
         return; // silently reject unauthorised DM join
       }
+      // Private groups: only members (and admins) may join the live room
+      try {
+        const { allowed } = await getChannelAccess(socket.user, room);
+        if (!allowed) return;
+      } catch { return; }
       socket.join(room);
     });
 

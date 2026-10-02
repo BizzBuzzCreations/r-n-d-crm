@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
   Hash, MessageCircle, Send, Trash2, Search, Paperclip,
-  X, FileText, ImageIcon, Film, File, Download, Loader2, Plus, Lock, Pencil, Settings, Ban, Bell, BellOff, Check,
+  X, FileText, ImageIcon, Film, File, Download, Loader2, Plus, Lock, Pencil, Settings, Ban, Bell, BellOff, Check, Eye,
 } from 'lucide-react';
 import useAppStore from '../store/useAppStore';
 import { getBackendUrl } from '../services/api';
@@ -149,6 +149,13 @@ function TypingDots({ names }) {
     </motion.div>
   );
 }
+
+// Groups: any staff user can create a private group chat. Editing/deleting is limited to admins and
+// the creator of that (private) group.
+const canCreateGroup = (user) => !!user && !['client', 'read_only'].includes(user.role);
+const canEditChannel = (user, ch) => !!user && !!ch && (
+  user.role === 'admin' || (ch.isPrivate && String(ch.createdBy?._id || ch.createdBy || '') === String(getId(user)))
+);
 
 export default function MessagesPage() {
   const { authUser, messages, activeThread, setActiveThread, sendMessage, deleteMessage, loadThread, leaveThread, emitTypingStart, emitTypingStop, addChannel, updateChannel, deleteChannel } = useAppStore(useShallow((s) => ({
@@ -382,16 +389,19 @@ export default function MessagesPage() {
             <div>
               <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1 flex items-center justify-between">
                 <span>Channels</span>
-                {authUser?.role === 'admin' && (
+                {canCreateGroup(authUser) && (
                   <button
                     onClick={() => {
                       setEditingChannel(null);
                       setChannelName('');
                       setChannelDesc('');
+                      setSelectedMembers([]);
+                      setMemberSearch('');
+                      setIsPrivate(authUser?.role !== 'admin');   // non-admins can only create private groups
                       setShowChannelModal(true);
                     }}
                     className="w-4.5 h-4.5 flex items-center justify-center rounded hover:bg-slate-800 text-slate-500 hover:text-slate-350 transition-colors"
-                    title="Create New Channel"
+                    title={authUser?.role === 'admin' ? 'Create New Channel' : 'Create Group Chat'}
                   >
                     <Plus size={12}/>
                   </button>
@@ -411,8 +421,8 @@ export default function MessagesPage() {
                   </div>
                   <span className="flex-1 truncate">{ch.name}</span>
                   
-                  {/* Admin inline edit/delete */}
-                  {authUser?.role === 'admin' && (
+                  {/* Admin / group-creator inline edit/delete */}
+                  {canEditChannel(authUser, ch) && (
                     <div className="hidden group-hover/chan:flex items-center gap-1 flex-shrink-0">
                       <button
                         onClick={(e) => {
@@ -560,7 +570,7 @@ export default function MessagesPage() {
               <div>
                 <div className="flex items-center gap-1.5">
                   <p className="text-[14px] font-semibold text-slate-900 dark:text-white">{threadTitle}</p>
-                  {isChannel && authUser?.role === 'admin' && (
+                  {isChannel && canEditChannel(authUser, activeChannel) && (
                     <button
                       onClick={() => {
                         setEditingChannel(activeChannel);
@@ -578,6 +588,12 @@ export default function MessagesPage() {
                   )}
                 </div>
                 <p className="text-[11.5px] text-slate-500">{threadDesc}</p>
+                {isChannel && authUser?.role === 'admin' && activeChannel?.isPrivate
+                  && !(activeChannel.members || []).some((m) => String(m?._id || m) === String(getId(authUser))) && (
+                  <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-[10.5px] font-semibold">
+                    <Eye size={10} /> Admin view — you are not a member of this group
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -942,7 +958,7 @@ export default function MessagesPage() {
                         )}
                       >
                         <div className="relative flex-shrink-0">
-                          <Avatar user={u} size="sm"/>
+                          <Avatar user={u} size="sm" preview={false} />
                           <span
                             className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-slate-800"
                             style={{ background: statusColor }}
@@ -1065,7 +1081,7 @@ export default function MessagesPage() {
                 </div>
 
                 {/* Private switch */}
-                {(!editingChannel || editingChannel.name !== 'general') && (
+                {authUser?.role === 'admin' && (!editingChannel || editingChannel.name !== 'general') && (
                   <div className="flex items-center justify-between p-3 rounded-xl border border-slate-100 dark:border-slate-700/60 bg-slate-50/50 dark:bg-slate-800/20">
                     <div>
                       <p className="text-[12.5px] font-bold text-slate-800 dark:text-white">Private Group Chat</p>
@@ -1153,7 +1169,7 @@ export default function MessagesPage() {
                                 }}
                                 className="rounded border-slate-300 dark:border-slate-600 text-primary-500 focus:ring-primary-500 w-3.5 h-3.5"
                               />
-                              <Avatar user={u} size="xs"/>
+                              <Avatar user={u} size="xs" preview={false} />
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-slate-800 dark:text-slate-200 leading-none mb-0.5">{u.name}</p>
                                 <p className="text-[10px] text-slate-450 truncate leading-none">{u.position || 'Teammate'}</p>
@@ -1249,4 +1265,4 @@ export default function MessagesPage() {
       </AnimatePresence>
     </Page>
   );
-}
+}

@@ -141,6 +141,7 @@ app.use('/api/email-templates', require('./routes/emailTemplates'));
 app.use('/api/meta-ads',       require('./routes/metaAds'));
 app.use('/api/website-intelligence', require('./routes/websiteIntelligence'));
 app.use('/api/api-keys',       require('./routes/apiKeys'));
+app.use('/api/payroll',        require('./routes/payroll'));
 app.use('/api/main-crm-integration', require('./routes/mainCrmIntegration'));
 app.use('/api/pagespeed-integration', require('./routes/pageSpeedIntegration'));
 app.use('/api/prospect-audits', require('./routes/prospectAudits'));

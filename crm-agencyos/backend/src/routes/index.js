@@ -6,6 +6,7 @@ const express = require('express');
 const { protect, authorize, authorizeRoles, denyClientWrites } = require('../middleware/auth');
 const { authorizeFeature } = require('../middleware/authorizeFeature');
 const upload  = require('../middleware/upload');
+const { uploadAvatar } = require('../middleware/uploadAvatar');
 const { loginLimiter, witPublicLimiter } = require('../middleware/rateLimiters');
 
 const auth = require('../controllers/authController');
@@ -24,6 +25,11 @@ authRouter.post('/refresh',  auth.refresh);
 authRouter.get('/me',        protect, auth.me);
 authRouter.put('/profile',   protect, auth.updateProfile);
 authRouter.put('/password',  protect, auth.changePassword);
+authRouter.put('/avatar',    protect, (req, res, next) => uploadAvatar.single('avatar')(req, res, (err) => {
+  if (err) return res.status(400).json({ success: false, message: err.message });
+  next();
+}), auth.uploadAvatar);
+authRouter.delete('/avatar', protect, auth.removeAvatar);
 module.exports.auth = authRouter;
 
 // ── Users routes ──────────────────────────────────────────────
@@ -38,11 +44,16 @@ module.exports.users = usersRouter;
 // ── Clients routes ────────────────────────────────────────────
 const clientsRouter = express.Router();
 clientsRouter.use(protect);
+// Members can VIEW Clients & Projects (they are in the 'clients' feature rule), but must never
+// create/edit/delete — that rule also gates the write routes below, so block them explicitly.
+const denyMemberWrites = (req, res, next) => (req.user.role === 'member'
+  ? res.status(403).json({ success: false, message: 'Members have read-only access to clients and projects' })
+  : next());
 clientsRouter.get('/',             ctrl.getClients);
 clientsRouter.get('/:id',          ctrl.getClient);
-clientsRouter.post('/',            authorizeFeature('clients', ['admin','manager']), ctrl.createClient);
-clientsRouter.put('/:id',          authorizeFeature('clients', ['admin','manager']), ctrl.updateClient);
-clientsRouter.delete('/:id',       authorizeFeature('clients', ['admin','manager']), ctrl.deleteClient);
+clientsRouter.post('/',            denyMemberWrites, authorizeFeature('clients', ['admin','manager']), ctrl.createClient);
+clientsRouter.put('/:id',          denyMemberWrites, authorizeFeature('clients', ['admin','manager']), ctrl.updateClient);
+clientsRouter.delete('/:id',       denyMemberWrites, authorizeFeature('clients', ['admin','manager']), ctrl.deleteClient);
 clientsRouter.post('/:id/notes',              ctrl.addClientNote);
 clientsRouter.post('/:id/reset-portal-password', authorize('admin'), ctrl.resetPortalPassword);
 module.exports.clients = clientsRouter;
@@ -133,7 +144,7 @@ module.exports.services = servicesRouter;
 const leadCtrl = require('../controllers/leadController');
 const leadsRouter = express.Router();
 leadsRouter.use(protect);
-leadsRouter.use(authorizeFeature('leads', ['admin','manager','client_relations','member']));
+leadsRouter.use(authorizeFeature('leads', ['admin','manager','client_relations']));
 leadsRouter.get('/',            leadCtrl.getLeads);
 leadsRouter.post('/bulk',       leadCtrl.bulkCreateLeads);   // /bulk before /:id
 leadsRouter.post('/merge',      authorize('admin','manager'), leadCtrl.mergeLeads);

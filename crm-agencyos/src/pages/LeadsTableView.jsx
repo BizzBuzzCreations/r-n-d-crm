@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../utils/helpers';
 
+import { AvatarContent } from '../components/ui';
 // ── Confirm Dialog ─────────────────────────────────────────────
 function ConfirmDialog({ open, title, message, confirmLabel = 'Confirm', confirmClass = 'bg-red-500 hover:bg-red-600 text-white', onConfirm, onCancel }) {
   if (!open) return null;
@@ -621,9 +622,9 @@ export default function LeadsTableView({ filteredLeads, allLeads, users, onSelec
           <div className="flex items-center gap-2 px-3 h-10">
             {assignee ? (
               <>
-                <span className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-[10px] font-bold"
-                  style={{ background: assignee.color || '#6366f1' }}>
-                  {assignee.initials || assignee.name?.[0] || '?'}
+                <span className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-[10px] font-bold overflow-hidden"
+                  style={{ background: assignee.avatar ? 'transparent' : (assignee.color || '#6366f1') }}>
+                  <AvatarContent user={assignee} fallback={assignee.initials || assignee.name?.[0]} />
                 </span>
                 <span className="text-[12.5px] font-semibold text-slate-700 dark:text-slate-300 truncate">{assignee.name}</span>
               </>
@@ -1034,11 +1035,11 @@ export default function LeadsTableView({ filteredLeads, allLeads, users, onSelec
                           />
                           <span style={{
                             width: 24, height: 24, borderRadius: '50%',
-                            background: u.color || '#6366f1',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: u.avatar ? 'transparent' : (u.color || '#6366f1'),
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
                             color: '#fff', fontSize: 10, fontWeight: 700, flexShrink: 0,
                           }}>
-                            {u.initials || u.name?.[0] || '?'}
+                            <AvatarContent user={u} fallback={u.initials || u.name?.[0] || '?'} />
                           </span>
                           <span style={{ fontSize: 12.5, fontWeight: 600, color: '#1e293b' }}>{u.name}</span>
                           {checked && <span style={{ marginLeft: 'auto', fontSize: 10, color: '#6366f1', fontWeight: 700 }}>✓</span>}

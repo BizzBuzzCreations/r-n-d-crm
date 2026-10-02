@@ -3,6 +3,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { Eye } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Navbar from './Navbar';
+import UserPreviewModal from '../components/UserPreviewModal';
 import useAppStore from '../store/useAppStore';
 
 export default function DashboardLayout() {
@@ -65,6 +66,7 @@ export default function DashboardLayout() {
           </main>
         </div>
       </div>
+      <UserPreviewModal />
     </div>
   );
 }

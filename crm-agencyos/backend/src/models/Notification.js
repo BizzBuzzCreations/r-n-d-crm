@@ -11,6 +11,7 @@ const NotificationSchema = new mongoose.Schema({
       'service_added', 'lead_assigned', 'lead_mentioned',
       'new_comment', 'email_sent', 'email_failed', 'email_opened', 'call_requested', 'email_replied', 'lead_captured', 'campaign_response',
       'lead_won', 'lead_lost', 'auth', 'system',
+      'leave_requested', 'leave_approved', 'leave_rejected',
     ],
     required: true,
   },

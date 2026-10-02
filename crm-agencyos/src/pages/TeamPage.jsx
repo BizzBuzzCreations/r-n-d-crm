@@ -8,8 +8,7 @@ import { useShallow } from 'zustand/shallow';
 import {
   Page, Avatar, Badge, ViewToggle, EmptyState,
   Modal, Input, Select, Button, ConfirmDialog,
-  PriorityBadge, StatusBadge, ProgressBar, Tabs,
-} from '../components/ui';
+  PriorityBadge, StatusBadge, ProgressBar, Tabs, AvatarContent } from '../components/ui';
 import { cn, getId, sameId, ROLE_CONFIG, canManage, canAdmin } from '../utils/helpers';
 
 const statusColors = { online: '#10b981', away: '#f59e0b', offline: '#94a3b8' };
@@ -196,10 +195,10 @@ function EditMemberModal({ open, onClose, user, onSave, currentUserRole, isCurre
         {/* Profile header preview */}
         <div className="flex items-center gap-4 p-4 rounded-xl bg-slate-50/60 dark:bg-white/[0.02] border border-slate-100 dark:border-slate-700/50">
           <div
-            className="w-14 h-14 rounded-full flex items-center justify-center text-white text-[20px] font-bold flex-shrink-0"
-            style={{ background: user.color || '#6366f1' }}
+            className="w-14 h-14 rounded-full flex items-center justify-center text-white text-[20px] font-bold flex-shrink-0 overflow-hidden"
+            style={{ background: user.avatar ? 'transparent' : (user.color || '#6366f1') }}
           >
-            {user.initials || user.name?.[0]}
+            <AvatarContent user={user} fallback={user.initials || user.name?.[0]} />
           </div>
           <div className="min-w-0">
             <h4 className="text-[14px] font-bold text-slate-900 dark:text-white truncate">{user.name}</h4>
@@ -402,10 +401,10 @@ function MemberCard({ user, taskCount, completedCount, isCurrentUser, canDelete,
       {/* Avatar */}
       <div className="relative inline-block mb-3">
         <div
-          className="w-16 h-16 rounded-full flex items-center justify-center text-white text-[22px] font-bold mx-auto"
-          style={{ background: user.color || '#6366f1' }}
+          className="w-16 h-16 rounded-full flex items-center justify-center text-white text-[22px] font-bold mx-auto overflow-hidden"
+          style={{ background: user.avatar ? 'transparent' : (user.color || '#6366f1') }}
         >
-          {user.initials || user.name?.[0]}
+          <AvatarContent user={user} fallback={user.initials || user.name?.[0]} />
         </div>
         <span
           className="absolute bottom-0.5 right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-slate-800"
@@ -543,10 +542,10 @@ function MemberDetailModal({ open, onClose, user, logs, loading, tasks, todos, a
           <div className="flex items-center gap-4">
             <div className="relative">
               <div
-                className="w-20 h-20 rounded-full flex items-center justify-center text-white text-[28px] font-bold"
-                style={{ background: user.color || '#6366f1' }}
+                className="w-20 h-20 rounded-full flex items-center justify-center text-white text-[28px] font-bold overflow-hidden"
+                style={{ background: user.avatar ? 'transparent' : (user.color || '#6366f1') }}
               >
-                {user.initials || user.name?.[0]}
+                <AvatarContent user={user} fallback={user.initials || user.name?.[0]} />
               </div>
               <span
                 className="absolute bottom-1 right-1 w-4 h-4 rounded-full border-2 border-white dark:border-slate-800"
@@ -1157,10 +1156,10 @@ export default function TeamPage() {
                           <div className="flex items-center gap-3">
                             <div className="relative flex-shrink-0">
                               <div
-                                className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[13px] font-bold"
-                                style={{ background: u.color || '#6366f1' }}
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[13px] font-bold overflow-hidden"
+                                style={{ background: u.avatar ? 'transparent' : (u.color || '#6366f1') }}
                               >
-                                {u.initials || u.name?.[0]}
+                                <AvatarContent user={u} fallback={u.initials || u.name?.[0]} />
                               </div>
                               <span
                                 className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-slate-800"

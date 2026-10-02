@@ -6,12 +6,12 @@ import {
   Check, PartyPopper, Eye, Calendar, MessageSquare,
   Building2, ClipboardList, Zap, Info, Target, AtSign,
   Trophy, TrendingDown, Send, AlertCircle, MessageCircle,
-  LogIn, Server, BellOff, MailOpen, PhoneCall, Reply, UserPlus,
-} from 'lucide-react';
+  LogIn, Server, BellOff, MailOpen, PhoneCall, Reply, UserPlus, CalendarOff } from 'lucide-react';
 import useAppStore from '../store/useAppStore';
 import { notificationsAPI } from '../services/api';
 import { cn } from '../utils/helpers';
 
+import { AvatarContent } from './ui';
 // ── Icon + colour map for every notification type ────────────────────────
 
 const TYPE_MAP = {
@@ -35,6 +35,9 @@ const TYPE_MAP = {
   email_replied:       { icon: Reply,         bg: 'bg-emerald-100 dark:bg-emerald-900/40',color: 'text-emerald-600 dark:text-emerald-400' },
   new_comment:         { icon: MessageCircle, bg: 'bg-sky-100 dark:bg-sky-900/40',        color: 'text-sky-600 dark:text-sky-400'        },
   auth:                { icon: LogIn,         bg: 'bg-indigo-100 dark:bg-indigo-900/40',  color: 'text-indigo-600 dark:text-indigo-400'  },
+  leave_requested:     { icon: CalendarOff,   bg: 'bg-amber-100 dark:bg-amber-900/40',    color: 'text-amber-600 dark:text-amber-400'    },
+  leave_approved:      { icon: CalendarOff,   bg: 'bg-emerald-100 dark:bg-emerald-900/40',color: 'text-emerald-600 dark:text-emerald-400' },
+  leave_rejected:      { icon: CalendarOff,   bg: 'bg-rose-100 dark:bg-rose-900/40',      color: 'text-rose-600 dark:text-rose-400'      },
   system:              { icon: Server,        bg: 'bg-slate-100 dark:bg-slate-700',       color: 'text-slate-600 dark:text-slate-400'    },
   default:             { icon: Info,          bg: 'bg-slate-100 dark:bg-slate-700',       color: 'text-slate-600 dark:text-slate-400'    },
 };
@@ -138,10 +141,10 @@ function NotifItem({ n, onRead, onDelete }) {
           {n.sender?.name && (
             <>
               <div
-                className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[8px] font-bold flex-shrink-0"
-                style={{ background: n.sender.color || '#6366f1' }}
+                className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[8px] font-bold flex-shrink-0 overflow-hidden"
+                style={{ background: n.sender.avatar ? 'transparent' : (n.sender.color || '#6366f1') }}
               >
-                {n.sender.initials || n.sender.name[0]}
+                <AvatarContent user={n.sender} fallback={n.sender.initials || n.sender.name[0]} />
               </div>
               <span className="text-[11px] text-slate-400">{n.sender.name}</span>
               <span className="text-slate-300 dark:text-slate-600">·</span>
@@ -190,7 +193,7 @@ export default function NotificationDrawer({ open, onClose }) {
         'meeting_scheduled': ['meeting_scheduled'],
         'message_dm':        ['message_dm', 'new_comment'],
         'email_sent':        ['email_sent', 'email_failed', 'email_opened', 'call_requested', 'email_replied'],
-        'system':            ['system', 'auth'],
+        'system':            ['system', 'auth', 'leave_requested', 'leave_approved', 'leave_rejected'],
       }[typeFilter] ?? [typeFilter];
       list = list.filter(n => group.includes(n.type));
     }

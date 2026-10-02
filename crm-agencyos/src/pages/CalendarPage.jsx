@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Video, CheckSquare, ListTodo, X, Calendar, U
 import useAppStore from '../store/useAppStore';
 import { useShallow } from 'zustand/shallow';
 import { Page, Tabs, Avatar, Badge } from '../components/ui';
-import { getCalendarDays, calEventColor, cn, canManage, getId, sameId } from '../utils/helpers';
+import { getCalendarDays, calEventColor, cn, canManage, getId, sameId, localDateStr } from '../utils/helpers';
 
 const DAYS   = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -25,7 +25,7 @@ export default function CalendarPage() {
   const users = useAppStore((s) => s.users);
 
   const today    = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = localDateStr(today);
   const role     = authUser?.role;
   const isManager= canManage(role);
 
@@ -212,7 +212,7 @@ export default function CalendarPage() {
           {/* Date cells */}
           <div className="grid grid-cols-7">
             {days.map(({ date, current }, i) => {
-              const dateStr   = date.toISOString().split('T')[0];
+              const dateStr   = localDateStr(date);
               const dayEvents = allEvents.filter((e) => e.date === dateStr);
               const isToday   = dateStr === todayStr;
               const isWknd    = date.getDay() === 0 || date.getDay() === 6;

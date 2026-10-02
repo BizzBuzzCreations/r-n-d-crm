@@ -1,4 +1,7 @@
 const jwt   = require('jsonwebtoken');
+const fs    = require('fs');
+const path  = require('path');
+const { avatarDir } = require('../middleware/uploadAvatar');
 const User  = require('../models/User');
 const { Client } = require('../models/index');
 const audit = require('../services/auditService');
@@ -163,6 +166,33 @@ exports.me = async (req, res) => {
 };
 
 // @PUT /api/auth/profile
+// Remove a previously uploaded avatar file from disk (ignores missing files and non-local URLs).
+const deleteAvatarFile = (avatarPath) => {
+  if (!avatarPath || !avatarPath.startsWith('/uploads/avatars/')) return;
+  const file = path.join(avatarDir, path.basename(avatarPath));
+  fs.promises.unlink(file).catch(() => {});
+};
+
+const saveAvatar = async (req, res, next, newPath) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    const old = user.avatar;
+    user.avatar = newPath;
+    await user.save();
+    deleteAvatarFile(old);
+    req.app.get('io')?.emit('user:updated', user);
+    res.json({ success: true, user });
+  } catch (err) { next(err); }
+};
+
+exports.uploadAvatar = (req, res, next) => {
+  if (!req.file) return res.status(400).json({ success: false, message: 'No image uploaded' });
+  return saveAvatar(req, res, next, `/uploads/avatars/${req.file.filename}`);
+};
+
+exports.removeAvatar = (req, res, next) => saveAvatar(req, res, next, null);
+
 exports.updateProfile = async (req, res, next) => {
   try {
     const { name, email, position, phone, bio, color, emailSync, calendarSyncEnabled, notificationPrefs, personalSignature, defaultLandingView } = req.body;

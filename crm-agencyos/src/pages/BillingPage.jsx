@@ -16,7 +16,7 @@ import {
   Page, Button, Badge, Modal, Input, Textarea, Select,
   ConfirmDialog, EmptyState, Skeleton, Tabs,
 } from '../components/ui';
-import { cn, fmtDate, canManage } from '../utils/helpers';
+import { cn, fmtDate, canManage, localDateStr } from '../utils/helpers';
 
 // ── Constants ──────────────────────────────────────────────────
 const STATUS_CFG = {
@@ -66,11 +66,11 @@ const fmtShort = (n) => {
   return `₹${n || 0}`;
 };
 
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => localDateStr();
 const futureDays = (d) => {
   const dt = new Date();
   dt.setDate(dt.getDate() + d);
-  return dt.toISOString().split('T')[0];
+  return localDateStr(dt);
 };
 
 function StatusPill({ status }) {

@@ -14,8 +14,7 @@ import { useShallow } from 'zustand/shallow';
 import {
   Page, Button, Badge, Avatar, AvatarGroup, StatusBadge,
   ViewToggle, EmptyState, Input, Textarea, Select, Modal, ProgressBar,
-  PriorityBadge, ConfirmDialog,
-} from '../components/ui';
+  PriorityBadge, ConfirmDialog, AvatarContent } from '../components/ui';
 import { cn, getId, sameId, CLIENT_STATUS_CONFIG, PAYMENT_CONFIG, canManage } from '../utils/helpers';
 
 // ── Calendar helpers ──────────────────────────────────────────
@@ -401,7 +400,6 @@ function EditProjectModal({ open, onClose, project, users, onSave }) {
     if (project && open) {
       setForm({
         name:        project.name        || '',
-        budget:      project.budget      || '',
         endDate:     project.endDate     || '',
         description: project.description || '',
         status:      project.status      || 'in-progress',
@@ -462,15 +460,6 @@ function EditProjectModal({ open, onClose, project, users, onSave }) {
               <option value="completed">Completed</option>
               <option value="on-hold">On Hold</option>
             </select>
-          </div>
-          <div>
-            <label className="block text-[13px] font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Budget</label>
-            <input
-              className="form-input text-[14px] py-2"
-              placeholder="e.g. $7,500"
-              value={form.budget || ''}
-              onChange={(e) => setForm((f) => ({ ...f, budget: e.target.value }))}
-            />
           </div>
           <div>
             <label className="block text-[13px] font-semibold text-slate-700 dark:text-slate-300 mb-1.5">End Date</label>
@@ -541,7 +530,6 @@ function EditClientModal({ open, onClose, client, users, services = [], industri
         phone:            client.phone            || '',
         website:          client.website          || '',
         industry:         client.industry         || '',
-        budget:           client.budget           || '',
         contractDuration: client.contractDuration || '',
         address:          client.address          || '',
         status:           client.status           || 'active',
@@ -626,11 +614,7 @@ function EditClientModal({ open, onClose, client, users, services = [], industri
             </select>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className={labelCls}>Budget / Contract Value</label>
-            <input className={inputCls} placeholder="e.g. $10,000" value={form.budget || ''} onChange={(e) => field('budget', e.target.value)} />
-          </div>
+        <div className="grid grid-cols-1 gap-4">
           <div>
             <label className={labelCls}>Contract End Date</label>
             <input type="date" className={inputCls} value={form.contractDuration || ''} onChange={(e) => field('contractDuration', e.target.value)} />
@@ -718,9 +702,9 @@ function EditClientModal({ open, onClose, client, users, services = [], industri
                         ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
                         : 'border-transparent bg-slate-100 dark:bg-slate-800/40 text-slate-650 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700'
                     )}>
-                    <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0"
-                      style={{ background: u.color || '#6366f1' }}>
-                      {u.initials || u.name?.[0]}
+                    <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0 overflow-hidden"
+                      style={{ background: u.avatar ? 'transparent' : (u.color || '#6366f1') }}>
+                      <AvatarContent user={u} fallback={u.initials || u.name?.[0]} />
                     </div>
                     {u.name.split(' ')[0]}
                   </button>
@@ -931,17 +915,12 @@ function ProjectDetailDrawer({ project, users, onClose, onEdit, onDelete, canEdi
           </div>
         </div>
 
-        {/* ── Status + Budget strip ── */}
+        {/* ── Status strip ── */}
         <div className="flex items-center gap-2.5 px-6 py-3.5 border-b border-slate-100 dark:border-slate-700/50 flex-wrap">
           <span className={cn('inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-semibold', sc.bg, sc.text)}>
             <span className={cn('w-2 h-2 rounded-full', sc.dot)} />
             {sc.label}
           </span>
-          {project.budget && (
-            <span className="inline-flex items-center px-3 py-1.5 rounded-full text-[12px] font-bold text-indigo-700 bg-indigo-50 dark:bg-indigo-900/20 dark:text-indigo-300">
-              {project.budget}
-            </span>
-          )}
         </div>
 
         {/* ── Body ── */}
@@ -1066,7 +1045,6 @@ function AddClientModal({ open, onClose, users, services = [], industries = DEFA
       createInitialProject,
       projectName: createInitialProject ? data.projectName : undefined,
       projectDesc: createInitialProject ? data.projectDesc : undefined,
-      projectBudget: createInitialProject ? data.projectBudget : undefined,
       projectEndDate: createInitialProject ? data.projectEndDate : undefined,
       projectAssignedTeam: createInitialProject ? selectedTeam : [],
     };
@@ -1123,8 +1101,7 @@ function AddClientModal({ open, onClose, users, services = [], industries = DEFA
           </Select>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="Budget" placeholder="e.g. $10,000" {...register('budget')} />
+        <div className="grid grid-cols-1 gap-4">
           <Input
             label="Contract End Date *"
             type="date"
@@ -1215,9 +1192,9 @@ function AddClientModal({ open, onClose, users, services = [], industries = DEFA
                         ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
                         : 'border-transparent bg-slate-100 dark:bg-slate-800/40 text-slate-650 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700'
                     )}>
-                    <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0"
-                      style={{ background: u.color || '#6366f1' }}>
-                      {u.initials || u.name?.[0]}
+                    <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0 overflow-hidden"
+                      style={{ background: u.avatar ? 'transparent' : (u.color || '#6366f1') }}>
+                      <AvatarContent user={u} fallback={u.initials || u.name?.[0]} />
                     </div>
                     {u.name.split(' ')[0]}
                   </button>
@@ -1254,16 +1231,11 @@ function AddClientModal({ open, onClose, users, services = [], industries = DEFA
               exit={{ opacity: 0, height: 0 }}
               className="mt-4 space-y-4 border border-indigo-100 dark:border-indigo-950 bg-indigo-50/20 dark:bg-indigo-950/10 rounded-xl p-4"
             >
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <Input
                   label="Project Name *"
                   placeholder="e.g. Website Redesign"
                   {...register('projectName')}
-                />
-                <Input
-                  label="Project Budget"
-                  placeholder="e.g. $5,000"
-                  {...register('projectBudget')}
                 />
               </div>
 
@@ -1367,12 +1339,7 @@ function AddProjectModal({ open, onClose, users, onSave, clientId }) {
           {...register('name', { required: 'Project name is required' })}
         />
         
-        <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="Budget"
-            placeholder="e.g. $7,500"
-            {...register('budget')}
-          />
+        <div className="grid grid-cols-1 gap-4">
           <Input
             label="End Date *"
             type="date"
@@ -1509,9 +1476,7 @@ export default function ClientsPage() {
             </div>
             <div className="flex flex-col items-end gap-2">
               <div className="text-right">
-                <div className="text-3xl font-bold text-indigo-300">{client.budget}</div>
-                <div className="text-slate-400 text-[12px] mt-0.5">Contract Value</div>
-                <div className="text-slate-400 text-[12.5px] mt-1 font-medium">{fmtContractDuration(client.contractDuration)}</div>
+                <div className="text-slate-400 text-[12.5px] font-medium">{fmtContractDuration(client.contractDuration)}</div>
               </div>
               {canManage(role) && (
                 <div className="flex items-center gap-2">
@@ -1679,10 +1644,8 @@ export default function ClientsPage() {
                         
                         <div className="pt-3 border-t border-slate-100 dark:border-slate-850 flex items-center justify-between flex-wrap gap-2">
                           <div className="space-y-1">
-                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Budget &amp; Deadline</span>
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Deadline</span>
                             <div className="flex items-center gap-2 text-[11.5px] font-medium text-slate-700 dark:text-slate-350">
-                              <span className="text-primary-600 font-bold">{p.budget || '—'}</span>
-                              <span className="text-slate-300 dark:text-slate-700">|</span>
                               <span className="flex items-center gap-0.5"><Calendar size={11} className="text-slate-400" /> {formattedEndDate}</span>
                             </div>
                           </div>
@@ -1905,8 +1868,7 @@ export default function ClientsPage() {
                   <Badge variant={payVariant(c.paymentStatus)}>{c.paymentStatus}</Badge>
                   <span className="badge badge-neutral text-[10.5px]">{c.projectCount} projects</span>
                 </div>
-                <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-700">
-                  <span className="text-[15px] font-bold text-primary-600">{c.budget}</span>
+                <div className="flex items-center justify-end pt-3 border-t border-slate-100 dark:border-slate-700">
                   <AvatarGroup users={team} max={3} size="xs" />
                 </div>
               </motion.div>
@@ -1920,7 +1882,7 @@ export default function ClientsPage() {
       {view === 'list' && (
         <div className="table-container">
           <table className="crm-table">
-            <thead><tr>{['Client','Contact','Industry','Services','Status','Payment','Budget','Progress','Team'].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+            <thead><tr>{['Client','Contact','Industry','Services','Status','Payment','Progress','Team'].map((h) => <th key={h}>{h}</th>)}</tr></thead>
             <tbody>
               {filtered.map((c) => {
                 const team   = users.filter((u) => c.assignedTeam?.some((tm) => sameId(tm, u)));
@@ -1935,7 +1897,6 @@ export default function ClientsPage() {
                     <td><div className="flex gap-1">{c.services.slice(0,2).map((s) => <Badge key={s} variant="neutral" className="text-[10px]">{s}</Badge>)}</div></td>
                     <td><Badge variant={CLIENT_STATUS_CONFIG[c.status]?.tw?.replace('badge-','') || 'neutral'}>{c.status}</Badge></td>
                     <td><Badge variant={payVariant(c.paymentStatus)}>{c.paymentStatus}</Badge></td>
-                    <td className="font-semibold text-primary-600">{c.budget}</td>
                     <td>
                       {cTasks.length > 0 ? (
                         <div className="flex items-center gap-2 min-w-[80px]">
@@ -1964,4 +1925,4 @@ export default function ClientsPage() {
       />
     </Page>
   );
-}
+}

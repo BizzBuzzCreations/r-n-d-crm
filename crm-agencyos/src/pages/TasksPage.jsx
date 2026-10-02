@@ -13,8 +13,7 @@ import { useShallow } from 'zustand/shallow';
 import { TodoDetailDrawer } from './TodosPage';
 import {
   Page, Button, Badge, PriorityBadge, StatusBadge, Avatar,
-  ViewToggle, EmptyState, ProgressBar, ConfirmDialog, DropdownMenu,
-} from '../components/ui';
+  ViewToggle, EmptyState, ProgressBar, ConfirmDialog, DropdownMenu, AvatarContent } from '../components/ui';
 import { cn, PRIORITY_CONFIG, canManage, truncate, getId, sameId } from '../utils/helpers';
 import GanttView from '../components/GanttView';
 
@@ -486,9 +485,9 @@ function TaskCreateDrawer({ open, onClose, users, clients, currentUser }) {
                             ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
                             : 'border-transparent bg-slate-100 dark:bg-slate-800/40 text-slate-650 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700'
                         )}>
-                        <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0"
-                          style={{ background: u.color || '#6366f1' }}>
-                          {u.initials || u.name?.[0]}
+                        <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0 overflow-hidden"
+                          style={{ background: u.avatar ? 'transparent' : (u.color || '#6366f1') }}>
+                          <AvatarContent user={u} fallback={u.initials || u.name?.[0]} />
                         </div>
                         {u.name.split(' ')[0]}
                         {sameId(u, currentUser) && <span className="text-[10px] opacity-50">(you)</span>}
@@ -981,8 +980,8 @@ function TaskDetailDrawer({ task, open, onClose, users, clients, authUser, role,
                             : cn('border-transparent bg-slate-100 dark:bg-slate-700/50 text-slate-600 dark:text-slate-400', isManager && 'hover:border-slate-300 dark:hover:border-slate-600'),
                           !isManager && 'cursor-default'
                         )}>
-                        <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold" style={{ background: u.color || '#6366f1' }}>
-                          {u.initials || u.name?.[0]}
+                        <div className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold overflow-hidden" style={{ background: u.avatar ? 'transparent' : (u.color || '#6366f1') }}>
+                          <AvatarContent user={u} fallback={u.initials || u.name?.[0]} />
                         </div>
                         {u.name.split(' ')[0]}
                         {sameId(u, authUser) && <span className="text-[10px] opacity-50">(you)</span>}

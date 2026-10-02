@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { AlertCircle, Layers, Plus } from 'lucide-react';
 
+import { AvatarContent } from '../components/ui';
 const STAGES = ['New Lead', 'First Contact', 'Proposal Sent', 'Won', 'Lost'];
 
 const STAGE_COLORS = {
@@ -100,9 +101,9 @@ function KanbanCard({ lead, onClick, onReassign, users, currentDraggedId, setCur
             title={assignee ? `Assigned: ${assignee.name}` : 'Unassigned — click to assign'}
           >
             {assignee ? (
-              <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-[11px] text-white"
-                style={{ background: assignee.color || '#6366f1' }}>
-                {assignee.initials || assignee.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
+              <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-[11px] text-white overflow-hidden"
+                style={{ background: assignee.avatar ? 'transparent' : (assignee.color || '#6366f1') }}>
+                <AvatarContent user={assignee} fallback={assignee.initials || assignee.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)} />
               </div>
             ) : (
               <div className="w-7 h-7 rounded-full bg-slate-150 dark:bg-slate-800 flex items-center justify-center text-slate-450 hover:bg-indigo-50 hover:text-indigo-500 border border-dashed border-slate-350 dark:border-slate-700">

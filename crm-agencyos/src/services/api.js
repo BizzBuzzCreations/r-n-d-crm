@@ -102,6 +102,12 @@ api.interceptors.response.use(
 
 export default api;
 
+// Turn a stored avatar value (e.g. "/uploads/avatars/x.png") into a loadable URL.
+export const avatarUrl = (avatar) => {
+  if (!avatar) return null;
+  return /^(https?:|data:|blob:)/.test(avatar) ? avatar : `${getBackendUrl()}${avatar}`;
+};
+
 // ─────────────────────────────────────────────────────────────
 // ── Auth  (Section 2)
 // ─────────────────────────────────────────────────────────────
@@ -112,6 +118,8 @@ export const authAPI = {
   me:             ()      => api.get('/auth/me'),
   updateProfile:  (body)  => api.put('/auth/profile',   body),
   changePassword: (body)  => api.put('/auth/password',  body),
+  uploadAvatar:   (file)  => { const fd = new FormData(); fd.append('avatar', file); return api.put('/auth/avatar', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); },
+  removeAvatar:   ()      => api.delete('/auth/avatar'),
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -528,6 +536,25 @@ export const apiKeysAPI = {
   getKeys:    ()     => api.get('/api-keys'),
   createKey:  (body) => api.post('/api-keys', body),
   deleteKey:  (id)   => api.delete(`/api-keys/${id}`),
+};
+
+// ─────────────────────────────────────────────────────────────
+// ── Payroll — Pay Runs (admin/manager) + Leaves (all staff, own-scoped)
+// ─────────────────────────────────────────────────────────────
+export const payrollAPI = {
+  getLeaves:         (params)    => api.get('/payroll/leaves', { params }),
+  // multipart because a leave request can carry an attachment
+  createLeave:       (body)      => {
+    const fd = new FormData();
+    Object.entries(body).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') fd.append(k, v); });
+    return api.post('/payroll/leaves', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  updateLeaveStatus: (id, body)  => api.put(`/payroll/leaves/${id}/status`, body),
+  deleteLeave:       (id)        => api.delete(`/payroll/leaves/${id}`),
+  getPayRuns:        ()          => api.get('/payroll/pay-runs'),
+  createPayRun:      (body)      => api.post('/payroll/pay-runs', body),
+  updatePayRun:      (id, body)  => api.put(`/payroll/pay-runs/${id}`, body),
+  deletePayRun:      (id)        => api.delete(`/payroll/pay-runs/${id}`),
 };
 
 // ─────────────────────────────────────────────────────────────
