@@ -31,6 +31,8 @@ import SocialComposerPage from '../pages/SocialComposerPage';
 import SocialCalendarPage from '../pages/SocialCalendarPage';
 import SocialPostsPage    from '../pages/SocialPostsPage';
 import ApiKeysPage         from '../pages/ApiKeysPage';
+import PayrollPayRunsPage from '../pages/payroll/PayrollPayRunsPage';
+import PayrollLeavesPage  from '../pages/payroll/PayrollLeavesPage';
 
 // ── Guards ────────────────────────────────────────────────────
 function RequireAuth({ children }) {
@@ -66,6 +68,15 @@ function RequireFeatureAccess({ featureKey, defaultRoles, children }) {
     return <Navigate to={authUser.role === 'client' ? '/portal' : '/dashboard'} replace />;
   }
   return children;
+}
+
+// /payroll itself has no page — send people to the first sub-section they can use
+// (Pay Runs for admin/manager, Leaves for everyone else).
+function PayrollIndexRedirect() {
+  const authUser = useAppStore((s) => s.authUser);
+  const systemSettings = useAppStore((s) => s.systemSettings);
+  const canPayRuns = hasFeatureAccess(authUser, systemSettings, 'payroll_pay_runs', ['admin', 'manager']);
+  return <Navigate to={canPayRuns ? '/payroll/pay-runs' : '/payroll/leaves'} replace />;
 }
 
 // Clients land on /portal; staff land on /dashboard
@@ -114,7 +125,7 @@ export default function AppRouter() {
           <Route
             path="clients"
             element={
-              <RequireFeatureAccess featureKey="clients" defaultRoles={['admin', 'manager', 'client_relations']}>
+              <RequireFeatureAccess featureKey="clients" defaultRoles={['admin', 'manager', 'member', 'client_relations']}>
                 <ClientsPage />
               </RequireFeatureAccess>
             }
@@ -122,7 +133,7 @@ export default function AppRouter() {
           <Route
             path="leads"
             element={
-              <RequireFeatureAccess featureKey="leads" defaultRoles={['admin', 'manager', 'client_relations', 'member']}>
+              <RequireFeatureAccess featureKey="leads" defaultRoles={['admin', 'manager', 'client_relations']}>
                 <LeadsPage />
               </RequireFeatureAccess>
             }
@@ -192,6 +203,23 @@ export default function AppRouter() {
             element={
               <RequireFeatureAccess featureKey="prospect_audit" defaultRoles={['admin', 'manager']}>
                 <ProspectAuditDetailPage />
+              </RequireFeatureAccess>
+            }
+          />
+          <Route path="payroll" element={<PayrollIndexRedirect />} />
+          <Route
+            path="payroll/pay-runs"
+            element={
+              <RequireFeatureAccess featureKey="payroll_pay_runs" defaultRoles={['admin', 'manager']}>
+                <PayrollPayRunsPage />
+              </RequireFeatureAccess>
+            }
+          />
+          <Route
+            path="payroll/leaves"
+            element={
+              <RequireFeatureAccess featureKey="payroll_leaves" defaultRoles={['admin', 'manager', 'member', 'client_relations', 'read_only']}>
+                <PayrollLeavesPage />
               </RequireFeatureAccess>
             }
           />

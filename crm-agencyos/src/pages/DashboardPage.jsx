@@ -12,7 +12,7 @@ import useAppStore, { sameId } from '../store/useAppStore';
 import { useShallow } from 'zustand/shallow';
 import { StatCard, Avatar, Badge, Page } from '../components/ui';
 import { PRODUCTIVITY_DATA, TASK_STATUS_DIST, REVENUE_DATA } from '../mockData';
-import { MEETING_TYPE_CONFIG, canManage, cn, getId, statusDist } from '../utils/helpers';
+import { MEETING_TYPE_CONFIG, canManage, cn, getId, statusDist, localDateStr } from '../utils/helpers';
 
 // ── Greeting ─────────────────────────────────────────────────
 function getGreeting() {
@@ -41,7 +41,7 @@ function heatColor(n) {
 function buildYearData(year, tasks, todos) {
   const today = new Date();
   today.setHours(23, 59, 59);
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = localDateStr(today);
 
   // Real data map
   const realMap = {};
@@ -479,7 +479,7 @@ export default function DashboardPage() {
 
   const currentMonthRev = useMemo(() => {
     if (!revenueSummary) return 0;
-    const thisMonthStr = new Date().toISOString().slice(0, 7);
+    const thisMonthStr = localDateStr().slice(0, 7);
     const matched = revenueSummary.monthlyTrend?.find(m => m._id === thisMonthStr);
     return matched ? matched.revenue : (revenueSummary.totalRevenue || 0);
   }, [revenueSummary]);

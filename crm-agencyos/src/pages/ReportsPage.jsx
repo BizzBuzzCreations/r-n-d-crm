@@ -12,15 +12,15 @@ import toast from 'react-hot-toast';
 import useAppStore from '../store/useAppStore';
 import { useShallow } from 'zustand/shallow';
 import { Page, Avatar, Badge, ProgressBar } from '../components/ui';
-import { cn, getId, sameId, canManage, ROLE_CONFIG, statusDist, STATUS_CHART_COLOR, PRIORITY_CONFIG } from '../utils/helpers';
+import { cn, getId, sameId, canManage, ROLE_CONFIG, statusDist, STATUS_CHART_COLOR, PRIORITY_CONFIG, localDateStr } from '../utils/helpers';
 
 // ── Date helpers ─────────────────────────────────────────────
-const todayStr   = () => new Date().toISOString().split('T')[0];
+const todayStr   = () => localDateStr();
 const fmtDisplay = (ds) => ds ? new Date(ds + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 
 function getDateRange(period, customDate) {
   const now   = new Date();
-  const today = now.toISOString().split('T')[0];
+  const today = localDateStr(now);
 
   if (period === 'today') {
     return { from: today, to: today, label: 'Today' };
@@ -31,8 +31,8 @@ function getDateRange(period, customDate) {
     const mon  = new Date(now.setDate(diff));
     const sun  = new Date(mon); sun.setDate(mon.getDate() + 6);
     return {
-      from:  mon.toISOString().split('T')[0],
-      to:    sun.toISOString().split('T')[0],
+      from:  localDateStr(mon),
+      to:    localDateStr(sun),
       label: `${mon.toLocaleDateString('en-US', { month:'short', day:'numeric' })} – ${sun.toLocaleDateString('en-US', { month:'short', day:'numeric' })}`,
     };
   }

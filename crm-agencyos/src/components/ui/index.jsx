@@ -1,6 +1,7 @@
 import { forwardRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Check, AlertCircle, Info, CheckCircle, Eye, EyeOff } from 'lucide-react';
+import { avatarUrl } from '../../services/api';
 import { cn, PRIORITY_CONFIG, STATUS_CONFIG } from '../../utils/helpers';
 
 // ── Button ────────────────────────────────────────────────────
@@ -65,17 +66,39 @@ export function StatusBadge({ status }) {
 }
 
 // ── Avatar ────────────────────────────────────────────────────
-export function Avatar({ user, size = 'sm', showStatus = false, className }) {
+// Profile picture if the user has one, otherwise their initials. The parent must clip (overflow-hidden).
+export function AvatarContent({ user, fallback }) {
+  const src = avatarUrl(user?.avatar);
+  if (src) return <img src={src} alt={user?.name || ''} className="w-full h-full object-cover" draggable={false} />;
+  return <>{fallback ?? (user?.initials || '??')}</>;
+}
+
+// Event name shared with components/UserPreviewModal.jsx (kept as a string here so ui/ doesn't import a component).
+const PREVIEW_EVENT = 'crm:preview-user';
+
+// `preview` (default on): clicking the avatar opens a larger photo + the user's
+// profile. Pass preview={false} where the avatar sits inside a picker/selector
+// whose own click handler must keep working.
+export function Avatar({ user, size = 'sm', showStatus = false, className, preview = true }) {
+  const canPreview = preview && !!user && (user.name || user.avatar);
+  const openPreview = (e) => {
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent(PREVIEW_EVENT, { detail: user }));
+  };
   const sizes = { xs: 'w-6 h-6 text-[10px]', sm: 'w-8 h-8 text-xs', md: 'w-10 h-10 text-sm', lg: 'w-12 h-12 text-base', xl: 'w-16 h-16 text-xl' };
   const statusColors = { online: '#10b981', away: '#f59e0b', offline: '#94a3b8' };
 
   return (
-    <div className={cn('relative inline-flex flex-shrink-0', className)}>
+    <div
+      className={cn('relative inline-flex flex-shrink-0', canPreview && 'cursor-pointer', className)}
+      onClick={canPreview ? openPreview : undefined}
+      title={canPreview ? `View ${user.name || 'profile'}` : undefined}
+    >
       <div
-        className={cn('rounded-full flex items-center justify-center font-semibold text-white flex-shrink-0', sizes[size])}
-        style={{ background: user?.color || '#6366f1' }}
+        className={cn('rounded-full flex items-center justify-center font-semibold text-white flex-shrink-0 overflow-hidden', sizes[size])}
+        style={{ background: user?.avatar ? 'transparent' : (user?.color || '#6366f1') }}
       >
-        {user?.initials || '??'}
+        <AvatarContent user={user} />
       </div>
       {showStatus && (
         <span

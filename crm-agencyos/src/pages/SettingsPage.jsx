@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import toast from 'react-hot-toast';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -8,12 +8,13 @@ import {
   PenTool, Clapperboard, Camera, Wrench, Lightbulb, Shield, Rocket, HelpCircle, 
   Mail, Calendar, Users, Sliders, FileText, Check, Settings, Info, ArrowUpRight, Megaphone, Search, Share2,
   Twitter, Youtube, Music2,
+  Wallet, CalendarOff,
   LayoutDashboard, ListTodo, CheckSquare, Target, MessageSquare, Video, Receipt, UserCircle, Terminal, KeyRound,
 } from 'lucide-react';
 import useAppStore, { getId, sameId } from '../store/useAppStore';
 import { useShallow } from 'zustand/shallow';
-import { Page, Toggle, Button, ConfirmDialog, Modal } from '../components/ui';
-import { cn, canManage, canAdmin, fmtDate, fmtTimer, ROLE_CONFIG } from '../utils/helpers';
+import { Page, Toggle, Button, ConfirmDialog, Modal, AvatarContent } from '../components/ui';
+import { cn, canManage, canAdmin, fmtDate, fmtTimer, ROLE_CONFIG, localDateStr } from '../utils/helpers';
 import api, { metaAdsAPI, witAPI, mainCrmAPI, pageSpeedIntegrationAPI, socialPlatformSettingsAPI } from '../services/api';
 import EmailAccountsManager from '../components/campaigns/EmailAccountsManager';
 import EmailTemplatesManager from '../components/campaigns/EmailTemplatesManager';
@@ -661,8 +662,8 @@ const FEATURE_DEFS = [
   { key: 'dashboard',            label: 'Dashboard',            icon: LayoutDashboard, defaultRoles: ['admin', 'manager', 'member', 'client_relations', 'read_only'] },
   { key: 'todos',                label: 'Todos',                icon: ListTodo,        defaultRoles: ['admin', 'manager', 'member', 'client_relations', 'read_only'] },
   { key: 'tasks',                label: 'Tasks',                icon: CheckSquare,     defaultRoles: ['admin', 'manager', 'member', 'client_relations', 'read_only'] },
-  { key: 'clients',              label: 'Clients & Projects',   icon: Users,           defaultRoles: ['admin', 'manager', 'client_relations', 'read_only'] },
-  { key: 'leads',                label: 'Leads Pipeline',       icon: Target,          defaultRoles: ['admin', 'manager', 'client_relations', 'member', 'read_only'] },
+  { key: 'clients',              label: 'Clients & Projects',   icon: Users,           defaultRoles: ['admin', 'manager', 'member', 'client_relations', 'read_only'] },
+  { key: 'leads',                label: 'Leads Pipeline',       icon: Target,          defaultRoles: ['admin', 'manager', 'client_relations', 'read_only'] },
   { key: 'campaigns',            label: 'Campaigns',            icon: Mail,            defaultRoles: ['admin', 'manager', 'read_only'] },
   { key: 'ads_monitoring',       label: 'Ads Monitoring',       icon: Megaphone,       defaultRoles: ['admin', 'manager', 'read_only'] },
   { key: 'website_intelligence', label: 'Website Intelligence', icon: Globe,           defaultRoles: ['admin', 'manager', 'read_only'] },
@@ -677,6 +678,8 @@ const FEATURE_DEFS = [
   { key: 'api_keys',             label: 'API Keys',             icon: KeyRound,        defaultRoles: ['admin', 'read_only'] },
   { key: 'prospect_audit',       label: 'Prospect Audits',      icon: Search,          defaultRoles: ['admin', 'manager', 'read_only'] },
   { key: 'social_media',         label: 'Social Media',         icon: Share2,          defaultRoles: ['admin', 'manager', 'read_only'] },
+  { key: 'payroll_pay_runs',     label: 'Payroll — Pay Runs',   icon: Wallet,          defaultRoles: ['admin', 'manager'] },
+  { key: 'payroll_leaves',       label: 'Payroll — Leaves',     icon: CalendarOff,     defaultRoles: ['admin', 'manager', 'member', 'client_relations', 'read_only'] },
 ];
 const FEATURE_ROUTABLE_ROLES = ['admin', 'manager', 'member', 'client_relations', 'read_only'];
 
@@ -997,8 +1000,8 @@ function TeamsManagementSection({ settings, onSave, users, onInvite }) {
                   <tr key={u._id} className="border-b border-slate-200 dark:border-slate-800/60 last:border-b-0 hover:bg-slate-50/40 dark:hover:bg-slate-900/10">
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full text-white font-bold flex items-center justify-center text-[12px]" style={{ background: u.color || '#6366f1' }}>
-                          {u.initials || 'U'}
+                        <div className="w-7 h-7 rounded-full text-white font-bold flex items-center justify-center text-[12px] overflow-hidden" style={{ background: u.avatar ? 'transparent' : (u.color || '#6366f1') }}>
+                          <AvatarContent user={u} fallback={u.initials || u.name?.[0]} />
                         </div>
                         <div>
                           <p className="text-[13px] font-bold text-slate-800 dark:text-slate-200">{u.name}</p>
@@ -2218,6 +2221,29 @@ function WebsitesSection() {
 
 // 11. Personal Profile Settings (All Members)
 function PersonalProfileSection({ user, onUpdate }) {
+  const updateAvatar = useAppStore((s) => s.updateAvatar);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const fileRef = useRef(null);
+
+  const handleAvatarPick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) return toast.error('Please choose a JPG, PNG, WebP or GIF image');
+    if (file.size > 3 * 1024 * 1024) return toast.error('Image must be 3 MB or smaller');
+    setAvatarBusy(true);
+    const res = await updateAvatar(file);
+    setAvatarBusy(false);
+    if (res.success) toast.success('Profile picture updated!');
+  };
+
+  const handleAvatarRemove = async () => {
+    setAvatarBusy(true);
+    const res = await updateAvatar(null);
+    setAvatarBusy(false);
+    if (res.success) toast.success('Profile picture removed');
+  };
+
   const { register, handleSubmit } = useForm({
     defaultValues: {
       name:  user?.name  || '',
@@ -2241,14 +2267,26 @@ function PersonalProfileSection({ user, onUpdate }) {
 
       <div className="flex items-center gap-4 mb-3">
         <div 
-          className="w-14 h-14 rounded-full flex items-center justify-center text-white text-[20px] font-bold shadow-sm"
-          style={{ background: color }}
+          className="w-16 h-16 rounded-full flex items-center justify-center text-white text-[22px] font-bold shadow-sm overflow-hidden flex-shrink-0"
+          style={{ background: user?.avatar ? 'transparent' : color }}
         >
-          {user?.name?.[0] || 'U'}
+          <AvatarContent user={user} fallback={user?.name?.[0] || 'U'} />
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-[15.5px] font-bold text-slate-900 dark:text-white">{user?.name}</p>
           <span className="badge badge-purple uppercase tracking-wider text-[9.5px] font-bold inline-block mt-0.5">{user?.role}</span>
+          <div className="flex items-center gap-2 mt-2">
+            <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={handleAvatarPick} />
+            <Button variant="outline" size="sm" type="button" disabled={avatarBusy} onClick={() => fileRef.current?.click()}>
+              <Camera size={13} /> {avatarBusy ? 'Uploading…' : user?.avatar ? 'Change Photo' : 'Upload Photo'}
+            </Button>
+            {user?.avatar && (
+              <Button variant="ghost" size="sm" type="button" disabled={avatarBusy} onClick={handleAvatarRemove}>
+                <Trash2 size={13} /> Remove
+              </Button>
+            )}
+          </div>
+          <p className="text-[11.5px] text-slate-400 mt-1.5">JPG, PNG, WebP or GIF · max 3 MB</p>
         </div>
       </div>
 
@@ -2265,6 +2303,8 @@ function PersonalProfileSection({ user, onUpdate }) {
           <label className="block text-[13.5px] font-semibold text-slate-700 dark:text-slate-350 mb-1.5">Contact Number</label>
           <input className="form-input text-[13.5px] py-2" {...register('phone')} />
         </div>
+        {/* The accent colour only shows behind initials, so hide it once a photo is set */}
+        {!user?.avatar && (
         <div>
           <label className="block text-[13.5px] font-semibold text-slate-700 dark:text-slate-350 mb-1.5">Personal Avatar Accent Color</label>
           <div className="flex flex-wrap gap-2 mt-1.5">
@@ -2277,6 +2317,7 @@ function PersonalProfileSection({ user, onUpdate }) {
             ))}
           </div>
         </div>
+        )}
         <div className="md:col-span-2">
           <label className="block text-[13.5px] font-semibold text-slate-700 dark:text-slate-350 mb-1.5">Short Bio</label>
           <textarea rows={3} className="form-input text-[13.5px] py-2 resize-none" {...register('bio')} placeholder="Write a short summary about yourself..." />
@@ -2703,7 +2744,7 @@ export default function SettingsPage() {
   };
 
   // Export handlers
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateStr();
 
   const handleExportTasks = () => {
     const rows = [
@@ -2725,8 +2766,8 @@ export default function SettingsPage() {
 
   const handleExportClients = () => {
     const rows = [
-      ['Name','Contact','Email','Phone','Industry','Status','Payment','Budget'],
-      ...clients.map((c) => [c.name, c.contact, c.email, c.phone, c.industry, c.status, c.paymentStatus, c.budget]),
+      ['Name','Contact','Email','Phone','Industry','Status','Payment'],
+      ...clients.map((c) => [c.name, c.contact, c.email, c.phone, c.industry, c.status, c.paymentStatus]),
     ];
     downloadCSV(rows, `clients-${today}.csv`);
     toast.success('Clients exported!');
@@ -2772,7 +2813,11 @@ export default function SettingsPage() {
         </div>
 
         {/* ── Right Content Dashboard Panel ── */}
-        <div className="flex-1 w-full bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/80 p-6 md:p-8 shadow-card min-h-[500px]">
+        <div className={cn(
+          'flex-1 w-full bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/80 p-6 md:p-8 shadow-card min-h-[500px]',
+          // Keep the panel pinned while the left navigation scrolls; tall tabs scroll inside the panel
+          'lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-7.5rem)] lg:overflow-y-auto'
+        )}>
           {/* Tier 3: Personal Settings */}
           {activeTab === 'profile' && (
             <PersonalProfileSection user={authUser} onUpdate={handleUpdateProfile} />
@@ -2983,7 +3028,7 @@ function WorkLogSection({ authUser, users }) {
         date:          log.date,
         workSeconds:   log.workSeconds || 0,
         breaks:        log.breaks || [],
-        isToday:       log.date === new Date().toISOString().split('T')[0],
+        isToday:       log.date === localDateStr(),
         targetSeconds: log.targetSeconds || (8 * 3600),
       });
     });

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, RefreshCw, LayoutGrid } from 'lucide-react';
-import { cn, PRIORITY_CONFIG } from '../utils/helpers';
+import { cn, PRIORITY_CONFIG, localDateStr } from '../utils/helpers';
 import { Avatar } from './ui';
 
 const LEFT_W = 285;
@@ -28,7 +28,7 @@ function addDays(d, n) {
 function daysDiff(a, b) {
   return Math.round((pd(b) - pd(a)) / 86400000);
 }
-function toStr(d) { return pd(d).toISOString().split('T')[0]; }
+function toStr(d) { return localDateStr(pd(d)); }
 function monthStart(year, month) { return new Date(year, month, 1); }
 function monthEnd(year, month)   { return new Date(year, month + 1, 0); }
 function fmtMonth(year, month)   {
@@ -155,7 +155,7 @@ export default function GanttView({
   emptyDescription = 'Items with start and due dates will appear here.',
 }) {
   const wrapRef  = useRef(null);
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = localDateStr();
 
   const datedItems   = items.filter(i => i.startDate && i.dueDate);
   const undatedItems = items.filter(i => !i.startDate || !i.dueDate);

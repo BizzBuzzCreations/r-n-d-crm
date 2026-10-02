@@ -3,6 +3,8 @@ const User    = require('../models/User');
 const { Message, Task, Todo, WorkLog, Channel, Project, Client } = require('../models/index');
 const notifService = require('../services/notificationService');
 const audit = require('../services/auditService');
+const { getChannelAccess } = require('../utils/channelAccess');
+const { isValidObjectId } = require('mongoose');
 
 // ── Shared helper: create a private channel for a project ────────
 // Called both from createProject (API route) and createClient (initial project)
@@ -82,6 +84,8 @@ exports.getThreadMessages = async (req, res, next) => {
   try {
     const { threadId } = req.params;
     const canonicalId = getCanonicalThreadId(threadId, req.user);
+    const access = await getChannelAccess(req.user, canonicalId);
+    if (!access.allowed) return res.status(403).json({ success: false, message: 'You do not have access to this conversation.' });
     const messages = await Message.find({ threadId: canonicalId })
       .populate('userId', 'name color initials status')
       .populate('reactions.userId', 'name')
@@ -107,6 +111,11 @@ exports.sendMessage = async (req, res, next) => {
           return res.status(403).json({ success: false, message: 'You do not have access to this channel.' });
         }
       }
+    }
+
+    if (req.user.role !== 'client') {
+      const access = await getChannelAccess(req.user, canonicalId);
+      if (!access.allowed) return res.status(403).json({ success: false, message: 'You do not have access to this conversation.' });
     }
 
     // Handle file attachments
@@ -389,6 +398,9 @@ exports.toggleReaction = async (req, res, next) => {
     const msg = await Message.findById(id);
     if (!msg) return res.status(404).json({ success: false, message: 'Message not found' });
 
+    const access = await getChannelAccess(req.user, msg.threadId);
+    if (!access.allowed) return res.status(403).json({ success: false, message: 'You do not have access to this conversation.' });
+
     if (!msg.reactions) msg.reactions = [];
     const existingIdx = msg.reactions.findIndex((r) => String(r.userId) === String(myId) && r.emoji === emoji);
     if (existingIdx >= 0) {
@@ -443,7 +455,16 @@ exports.getChannels = async (req, res, next) => {
 
 exports.createChannel = async (req, res, next) => {
   try {
-    const { name, description, isPrivate, members } = req.body;
+    if (req.user.role === 'client') {
+      return res.status(403).json({ success: false, message: 'Clients cannot create groups' });
+    }
+    const isAdmin = req.user.role === 'admin';
+    const { name, description, members } = req.body;
+    // Admins can create public channels or private groups; everyone else creates private group chats only.
+    const isPrivate = isAdmin ? req.body.isPrivate : true;
+    if (!isAdmin && String(name || '').trim().toLowerCase() === 'general') {
+      return res.status(400).json({ success: false, message: 'That name is reserved' });
+    }
     if (!name?.trim()) {
       return res.status(400).json({ success: false, message: 'Channel name is required' });
     }
@@ -452,7 +473,12 @@ exports.createChannel = async (req, res, next) => {
     // Process members if private
     let groupMembers = [];
     if (isPrivate) {
-      const parsedMembers = Array.isArray(members) ? members : [];
+      let parsedMembers = Array.isArray(members) ? members : [];
+      if (!isAdmin) {
+        // Non-admin creators can only add real, non-client staff accounts
+        const wanted = parsedMembers.map(String).filter((id) => isValidObjectId(id));
+        parsedMembers = (await User.find({ _id: { $in: wanted }, role: { $ne: 'client' } }, '_id').lean()).map((u) => String(u._id));
+      }
       // Ensure creator is always in the private group
       const creatorIdStr = String(req.user._id);
       if (!parsedMembers.includes(creatorIdStr)) {
@@ -495,7 +521,10 @@ exports.createChannel = async (req, res, next) => {
 
 exports.updateChannel = async (req, res, next) => {
   try {
-    const { name, description, isPrivate, members } = req.body;
+    const isAdmin = req.user.role === 'admin';
+    const { name, description, members } = req.body;
+    // A creator can't turn their private group public — only admins choose that.
+    const isPrivate = isAdmin ? req.body.isPrivate : true;
     if (!name?.trim()) {
       return res.status(400).json({ success: false, message: 'Channel name is required' });
     }
@@ -506,11 +535,18 @@ exports.updateChannel = async (req, res, next) => {
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Channel not found' });
     }
+    if (!isAdmin && !(existing.isPrivate && String(existing.createdBy) === String(req.user._id))) {
+      return res.status(403).json({ success: false, message: 'Only the group creator or an admin can edit this group' });
+    }
 
     // Process members if private
     let groupMembers = [];
     if (isPrivate) {
-      const parsedMembers = Array.isArray(members) ? members : [];
+      let parsedMembers = Array.isArray(members) ? members : [];
+      if (!isAdmin) {
+        const wanted = parsedMembers.map(String).filter((id) => isValidObjectId(id));
+        parsedMembers = (await User.find({ _id: { $in: wanted }, role: { $ne: 'client' } }, '_id').lean()).map((u) => String(u._id));
+      }
       const creatorIdStr = String(existing.createdBy || req.user._id);
       if (!parsedMembers.includes(creatorIdStr)) {
         parsedMembers.push(creatorIdStr);
@@ -548,6 +584,7 @@ exports.updateChannel = async (req, res, next) => {
       if (hadAccess && !hasAccess) {
         // User was removed
         io?.to(`user:${userId}`).emit('channel:deleted', channel._id);
+        io?.in(`user:${userId}`).socketsLeave(String(channel._id));
       } else if (!hadAccess && hasAccess) {
         // User was added
         io?.to(`user:${userId}`).emit('channel:created', channel);
@@ -574,6 +611,10 @@ exports.deleteChannel = async (req, res, next) => {
     const channel = await Channel.findById(req.params.id);
     if (!channel) {
       return res.status(404).json({ success: false, message: 'Channel not found' });
+    }
+
+    if (req.user.role !== 'admin' && !(channel.isPrivate && String(channel.createdBy) === String(req.user._id))) {
+      return res.status(403).json({ success: false, message: 'Only the group creator or an admin can delete this group' });
     }
 
     if (channel.name === 'general') {

@@ -10,11 +10,11 @@ import {
   FileSpreadsheet, FileText, Download, Calendar, X, ChevronDown, ChevronRight, TrendingUp, BarChart3,
 } from 'lucide-react';
 import { Page, Button, Badge } from '../components/ui';
-import { cn } from '../utils/helpers';
+import { cn, localDateStr } from '../utils/helpers';
 import { witAPI } from '../services/api';
 
 // ── Date range helpers ──────────────────────────────────────────────
-function fmtISO(d) { return d.toISOString().split('T')[0]; }
+function fmtISO(d) { return localDateStr(d); }
 function getDateRange(period, customFrom, customTo) {
   const today = new Date();
   if (period === 'today') return { from: fmtISO(today), to: fmtISO(today), label: 'Today' };

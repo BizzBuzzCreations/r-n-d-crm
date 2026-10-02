@@ -107,7 +107,13 @@ export const getInitials = (name) =>
     : '??';
 
 // ── Date helpers ───────────────────────────────────────────────
-export const today = () => new Date().toISOString().split('T')[0];
+// YYYY-MM-DD for the *local* calendar day. Never use toISOString() for this: it converts to UTC,
+// so in any timezone ahead of UTC (e.g. IST) the date comes out a day early/late around midnight.
+export const localDateStr = (d = new Date()) => {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+export const today = () => localDateStr();
 export const isPast = (dateStr) => new Date(dateStr) < new Date();
 export const isToday = (dateStr) => dateStr === today();
 

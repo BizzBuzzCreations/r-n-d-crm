@@ -1,4 +1,5 @@
 import { create }  from 'zustand';
+import { localDateStr } from '../utils/helpers';
 import { io }       from 'socket.io-client';
 import toast        from 'react-hot-toast';
 import { createElement } from 'react';
@@ -11,7 +12,7 @@ import {
 } from '../services/api';
 
 // ── Helpers ──────────────────────────────────────────────────
-const todayStr = () => new Date().toISOString().split('T')[0];
+const todayStr = () => localDateStr();
 
 // ID normalizer: handles both populated objects and raw id strings
 export const getId = (ref) => ref?._id || ref?.id || String(ref || '');
@@ -84,7 +85,7 @@ function flushTimerToDb(store) {
   if (!token) return;
   const base = getSocketUrl();
   const body = JSON.stringify({
-    date: timer.sessionDate || new Date().toISOString().split('T')[0],
+    date: timer.sessionDate || localDateStr(),
     workSeconds: timer.workSeconds,
     sessionStart: timer.sessionStart,
     breaks: timer.breaks || [],
@@ -507,6 +508,7 @@ function connectSocket(store) {
       description: ch.description || '',
       isPrivate: !!ch.isPrivate,
       members: ch.members || [],
+      createdBy: ch.createdBy || null,
       clientId:  ch.clientId  || null,
       projectId: ch.projectId || null,
       unread: 0
@@ -533,6 +535,7 @@ function connectSocket(store) {
                 description: ch.description || '',
                 isPrivate: !!ch.isPrivate,
                 members: ch.members || [],
+                createdBy: ch.createdBy ?? c.createdBy,
                 clientId:  ch.clientId  ?? c.clientId,
                 projectId: ch.projectId ?? c.projectId,
               }
@@ -564,7 +567,7 @@ function connectSocket(store) {
     // (user:offline previously wiped timerActive to false)
     const me = store.getState().authUser;
     if (me?.role === 'admin' || me?.role === 'manager') {
-      worklogAPI.getAll({ userId, date: new Date().toISOString().split('T')[0] })
+      worklogAPI.getAll({ userId, date: localDateStr() })
         .then(({ data }) => {
           const log = (data?.data || [])[0];
           if (log) {
@@ -1602,7 +1605,12 @@ const useAppStore = create((set, get, store) => ({
           ...dbTimer,
           workSeconds: Math.max(dbTimer.workSeconds || 0, sameDayLocal ? (saved.workSeconds || 0) : 0),
           breaks:      sameDayLocal && saved.breaks?.length > dbTimer.breaks?.length ? saved.breaks : dbTimer.breaks,
-          lastTickTime: dbTimer.active ? Date.now() : null,
+          // Resume from the last persisted tick (if this device saved one at least as fresh as the
+          // DB) so time that passed while the tab was frozen/discarded/reloading is credited by the
+          // first tick instead of being lost. tickTimer caps any single gap at IDLE_GAP_CAP_S.
+          lastTickTime: dbTimer.active
+            ? (sameDayLocal && saved.lastTickTime && (saved.workSeconds || 0) >= (dbTimer.workSeconds || 0) ? saved.lastTickTime : Date.now())
+            : null,
         };
       } else if (saved && saved.sessionDate === today) {
         timerState = { ...saved, breakActive: false, currentBreak: null };
@@ -1709,6 +1717,19 @@ const useAppStore = create((set, get, store) => ({
     }
   },
 
+  // Profile picture (DP): upload a new image or remove the current one
+  updateAvatar: async (file) => {
+    try {
+      const { data } = file ? await authAPI.uploadAvatar(file) : await authAPI.removeAvatar();
+      set((s) => ({ authUser: { ...s.authUser, avatar: data.user.avatar } }));
+      return { success: true, user: data.user };
+    } catch (err) {
+      const msg = err.response?.data?.message || 'Failed to update profile picture';
+      toast.error(msg);
+      return { success: false, message: msg };
+    }
+  },
+
   // Restore session on page reload using stored token
   restoreSession: async () => {
     const token = localStorage.getItem('crm_access_token');
@@ -1751,7 +1772,9 @@ const useAppStore = create((set, get, store) => ({
           ...dbTimer,
           workSeconds: Math.max(dbTimer.workSeconds || 0, sameDayLocal ? (saved.workSeconds || 0) : 0),
           breaks:      sameDayLocal && saved.breaks?.length > dbTimer.breaks?.length ? saved.breaks : dbTimer.breaks,
-          lastTickTime: dbTimer.active ? Date.now() : null,
+          lastTickTime: dbTimer.active
+            ? (sameDayLocal && saved.lastTickTime && (saved.workSeconds || 0) >= (dbTimer.workSeconds || 0) ? saved.lastTickTime : Date.now())
+            : null,
         };
       } else if (saved && saved.sessionDate === today) {
         timerState = { ...saved, breakActive: false, currentBreak: null };
@@ -1812,6 +1835,7 @@ const useAppStore = create((set, get, store) => ({
           description: c.description || '',
           isPrivate:   !!c.isPrivate,
           members:     c.members || [],
+          createdBy:   c.createdBy || null,
           clientId:    c.clientId || null,
           unread:      savedUnread[String(c._id)] || 0,
         }));
@@ -1863,6 +1887,7 @@ const useAppStore = create((set, get, store) => ({
         description: c.description || '',
         isPrivate:   !!c.isPrivate,
         members:     c.members || [],
+        createdBy:   c.createdBy || null,
         clientId:    c.clientId  || null,
         projectId:   c.projectId || null,
         unread:      savedUnread[String(c._id)] || 0,
@@ -2268,13 +2293,23 @@ const useAppStore = create((set, get, store) => ({
     if (!s.timer.active || s.timer.breakActive) return {};
     const now = Date.now();
     const lastTick = s.timer.lastTickTime || now;
-    const delta = Math.max(0, Math.floor((now - lastTick) / 1000));
-    
+
+    // Work time is always derived from the wall clock (now - lastTickTime), never from
+    // "how many times the interval fired" — browsers throttle/freeze timers in
+    // background tabs, so a tick can arrive late (or after a long pause) and must
+    // credit everything that really elapsed.
+    if (now < lastTick) return { timer: { ...s.timer, lastTickTime: now } };     // clock moved backwards: resync
+    const delta = Math.floor((now - lastTick) / 1000);
+    if (delta <= 0) return s.timer.lastTickTime ? {} : { timer: { ...s.timer, lastTickTime: now } };  // <1s elapsed: nothing to add
+
     // Backgrounded/throttled tabs, screen locks, and network blips must NOT cost work
     // time — only a genuine multi-hour gap (real OS sleep/hibernation, or a forgotten
     // check-out overnight) gets capped, as a safety net against unbounded hour inflation
     // in a single jump.
-    const actualDelta = delta > 0 ? Math.min(delta, IDLE_GAP_CAP_S) : 1;
+    const actualDelta = Math.min(delta, IDLE_GAP_CAP_S);
+    // Advance the anchor by exactly the whole seconds credited so the sub-second
+    // remainder carries over to the next tick instead of being dropped.
+    const nextTick = delta > IDLE_GAP_CAP_S ? now : lastTick + delta * 1000;
     const rawWorkSeconds = s.timer.workSeconds + actualDelta;
     const uid = getId(s.authUser);
 
@@ -2292,7 +2327,7 @@ const useAppStore = create((set, get, store) => ({
     }
 
     const workSeconds = rawWorkSeconds;
-    const upd = { ...s.timer, workSeconds, lastTickTime: now };
+    const upd = { ...s.timer, workSeconds, lastTickTime: nextTick };
 
     // Sync to database if we crossed a 15-second boundary
     const oldBoundary = Math.floor(s.timer.workSeconds / 15);
@@ -2322,9 +2357,10 @@ const useAppStore = create((set, get, store) => ({
     if (!s.timer.breakActive || !s.timer.currentBreak) return {};
     const now = Date.now();
     const lastTick = s.timer.currentBreak.lastBreakTickTime || now;
-    const delta = Math.max(0, Math.floor((now - lastTick) / 1000));
-    const actualDelta = delta > 0 ? delta : 1;
-    const elapsed = s.timer.currentBreak.elapsedSeconds + actualDelta;
+    if (now < lastTick) return { timer: { ...s.timer, currentBreak: { ...s.timer.currentBreak, lastBreakTickTime: now } } };
+    const delta = Math.floor((now - lastTick) / 1000);
+    if (delta <= 0) return {};
+    const elapsed = s.timer.currentBreak.elapsedSeconds + delta;
     const { totalSeconds } = s.timer.currentBreak;
 
     if (elapsed >= totalSeconds) {
@@ -2336,7 +2372,7 @@ const useAppStore = create((set, get, store) => ({
       return { timer:upd };
     }
 
-    const upd = { ...s.timer, currentBreak:{ ...s.timer.currentBreak, elapsedSeconds:elapsed, lastBreakTickTime: now } };
+    const upd = { ...s.timer, currentBreak:{ ...s.timer.currentBreak, elapsedSeconds:elapsed, lastBreakTickTime: lastTick + delta * 1000 } };
     const oldLSBoundary = Math.floor(s.timer.currentBreak.elapsedSeconds / 15);
     const newLSBoundary = Math.floor(elapsed / 15);
     if (newLSBoundary > oldLSBoundary || elapsed % 15 === 0) saveTimerLS(getId(s.authUser), upd);

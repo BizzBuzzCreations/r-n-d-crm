@@ -10,11 +10,11 @@ import {
   Target, UserCheck, Trophy, ArrowLeft,
 } from 'lucide-react';
 import { Page, Button } from '../components/ui';
-import { cn } from '../utils/helpers';
+import { cn, localDateStr } from '../utils/helpers';
 import { metaAdsAPI } from '../services/api';
 
 // ── Date range helpers (mirrors ReportsPage.jsx's convention) ──────────
-function fmtISO(d) { return d.toISOString().split('T')[0]; }
+function fmtISO(d) { return localDateStr(d); }
 
 function getDateRange(period, customFrom, customTo) {
   const today = new Date();

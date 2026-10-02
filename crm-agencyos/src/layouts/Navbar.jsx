@@ -225,7 +225,7 @@ export default function Navbar() {
             onClick={() => { setShowProfile((s) => !s); setShowNotif(false); }}
             className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
-            <Avatar user={authUser} size="sm" showStatus />
+            <Avatar user={authUser} size="sm" showStatus preview={false} />
             <div className="hidden sm:block text-left">
               <div className="text-[13px] font-semibold text-slate-800 dark:text-slate-200 leading-none">{authUser?.name?.split(' ')[0]}</div>
               <div className="text-[11px] text-slate-500 capitalize mt-0.5">{authUser?.role}</div>
@@ -236,7 +236,7 @@ export default function Navbar() {
           <AnimatePresence>
             {showProfile && (
               <motion.div
-                className="absolute right-0 top-[calc(100%+8px)] w-[220px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-modal overflow-hidden z-50"
+                className="absolute right-0 top-[calc(100%+8px)] w-[280px] max-w-[calc(100vw-1.5rem)] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-modal overflow-hidden z-50"
                 initial={{ opacity: 0, scale: 0.95, y: -6 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: -6 }}
@@ -245,11 +245,11 @@ export default function Navbar() {
                 {/* User info */}
                 <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700">
                   <div className="flex items-center gap-2.5">
-                    <Avatar user={authUser} size="md" />
-                    <div>
-                      <p className="text-[13.5px] font-semibold text-slate-900 dark:text-white">{authUser?.name}</p>
-                      <p className="text-[11.5px] text-slate-500">{authUser?.email}</p>
-                      <span className={cn('badge text-[10px] mt-1', roleCfg.tw)}>{roleCfg.label}</span>
+                    <Avatar user={authUser} size="lg" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13.5px] font-semibold text-slate-900 dark:text-white truncate" title={authUser?.name}>{authUser?.name}</p>
+                      <p className="text-[11.5px] text-slate-500 truncate" title={authUser?.email}>{authUser?.email}</p>
+                      <span className={cn('badge text-[10px] mt-1 inline-block', roleCfg.tw)}>{roleCfg.label}</span>
                     </div>
                   </div>
                 </div>

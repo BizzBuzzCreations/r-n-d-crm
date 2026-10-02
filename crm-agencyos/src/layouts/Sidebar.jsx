@@ -6,7 +6,7 @@ import {
   BarChart3, Video, Calendar, Settings, LogOut, UserCircle,
   Pause, Play, Coffee, ChevronDown, ChevronUp, Timer, Utensils, Pencil, Target, Shield, Terminal,
   Building2, Receipt, Mail, Megaphone, Globe2, KeyRound, Search,
-  Share2, PenTool, FileText,
+  Share2, PenTool, FileText, ChevronLeft, ChevronRight, Wallet, CalendarOff,
 } from 'lucide-react';
 import useAppStore from '../store/useAppStore';
 import { Avatar } from '../components/ui';
@@ -40,14 +40,46 @@ function MemberTimer({ open }) {
   const [isEditingTarget, setIsEditingTarget] = useState(false);
 
   // ── Master tick using getState() to avoid stale closure ──────
+  // Elapsed time is computed from the wall clock inside tickTimer/tickBreak, so ticks only
+  // need to arrive *eventually*. Browsers aggressively throttle page timers in background
+  // tabs (down to ~1/min), so the 1s heartbeat runs in a Web Worker (not throttled the same
+  // way) and we also catch up instantly whenever the tab/window becomes visible or focused.
   useEffect(() => {
-    const id = setInterval(() => {
+    const tick = () => {
       const s = useAppStore.getState();
       if (!s.timer) return;
       if (s.timer.breakActive) s.tickBreak?.();
       else if (s.timer.active) s.tickTimer?.();
-    }, 1000);
-    return () => clearInterval(id);
+    };
+
+    let worker = null;
+    let workerUrl = null;
+    let fallbackId = null;
+    const startFallback = () => { if (!fallbackId) fallbackId = setInterval(tick, 1000); };
+    try {
+      workerUrl = URL.createObjectURL(new Blob(['setInterval(function(){postMessage(0)},1000)'], { type: 'text/javascript' }));
+      worker = new Worker(workerUrl);
+      worker.onmessage = tick;
+      worker.onerror = () => { worker?.terminate(); worker = null; startFallback(); }; // e.g. blocked by CSP
+    } catch {
+      startFallback();
+    }
+
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', tick);
+    window.addEventListener('online', tick);
+    window.addEventListener('pageshow', tick);
+
+    return () => {
+      worker?.terminate();
+      if (workerUrl) URL.revokeObjectURL(workerUrl);
+      if (fallbackId) clearInterval(fallbackId);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', tick);
+      window.removeEventListener('online', tick);
+      window.removeEventListener('pageshow', tick);
+    };
   }, []); // run once on mount, never restart
 
   // ── Derived ───────────────────────────────────────────────
@@ -433,8 +465,8 @@ const NAV = [
       { path: '/dashboard', label: 'Dashboard',            icon: LayoutDashboard, roles: ['admin','manager','member','client_relations'], featureKey: 'dashboard' },
       { path: '/todos',     label: 'Todos',                icon: ListTodo,        roles: ['admin','manager','member','client_relations'], featureKey: 'todos' },
       { path: '/tasks',     label: 'Tasks',                icon: CheckSquare,     roles: ['admin','manager','member','client_relations'], featureKey: 'tasks' },
-      { path: '/clients',   label: 'Clients & Projects',   icon: Users,           roles: ['admin','manager','client_relations'], featureKey: 'clients' },
-      { path: '/leads',     label: 'Leads Pipeline',       icon: Target,          roles: ['admin','manager','client_relations','member'], featureKey: 'leads' },
+      { path: '/clients',   label: 'Clients & Projects',   icon: Users,           roles: ['admin','manager','member','client_relations'], featureKey: 'clients' },
+      { path: '/leads',     label: 'Leads Pipeline',       icon: Target,          roles: ['admin','manager','client_relations'], featureKey: 'leads' },
       { path: '/campaigns', label: 'Campaigns',            icon: Mail,            roles: ['admin','manager'], featureKey: 'campaigns' },
       {
         key: 'ads-monitoring', label: 'Ads Monitoring', icon: Megaphone, roles: ['admin','manager'],
@@ -458,6 +490,15 @@ const NAV = [
       { path: '/messages',  label: 'Messages',             icon: MessageSquare,   roles: ['admin','manager','member','client_relations','client'], featureKey: 'messages', badge: true },
       { path: '/meetings',  label: 'Meetings',             icon: Video,           roles: ['admin','manager','member','client_relations'], featureKey: 'meetings' },
       { path: '/reports',   label: 'Reports',              icon: BarChart3,       roles: ['admin','manager','member','client_relations'], featureKey: 'reports' },
+      {
+        // Between Reports and Calendar. Admin/manager get both; everyone else
+        // only sees Leaves (Pay Runs is hidden by its own feature rule).
+        key: 'payroll', label: 'Payroll', icon: Wallet, roles: ['admin','manager','member','client_relations'],
+        children: [
+          { path: '/payroll/pay-runs', label: 'Pay Runs', icon: Wallet,      roles: ['admin','manager'], featureKey: 'payroll_pay_runs' },
+          { path: '/payroll/leaves',   label: 'Leaves',   icon: CalendarOff, roles: ['admin','manager','member','client_relations'], featureKey: 'payroll_leaves' },
+        ],
+      },
       { path: '/calendar',  label: 'Calendar',             icon: Calendar,        roles: ['admin','manager','member','client_relations'], featureKey: 'calendar' },
     ],
   },
@@ -484,6 +525,7 @@ export default function Sidebar() {
   const authUser    = useAppStore((s) => s.authUser);
   const systemSettings = useAppStore((s) => s.systemSettings);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const messages    = useAppStore((s) => s.messages);
   const logout      = useAppStore((s) => s.logout);
   const location    = useLocation();
@@ -509,33 +551,45 @@ export default function Sidebar() {
 
   return (
     <motion.aside
-      className="flex flex-col bg-sidebar h-screen flex-shrink-0 border-r border-sidebar-border"
+      className="relative z-40 flex flex-col bg-sidebar h-screen flex-shrink-0 border-r border-sidebar-border"
       style={{ overflow: 'visible' }}
       animate={{ width: sidebarOpen ? 232 : 58 }}
       transition={{ duration: 0.22, ease: 'easeInOut' }}
     >
       {/* ── Logo ── */}
       <div className={cn(
-        'flex items-center gap-2.5 px-3 py-4 border-b border-sidebar-border flex-shrink-0',
-        !sidebarOpen && 'justify-center px-0'
+        'flex border-b border-sidebar-border flex-shrink-0',
+        sidebarOpen ? 'items-center px-3 py-3' : 'justify-center py-4'
       )}>
-        <img
-          src="/sidebar_bbcCRM.png"
-          alt="BBC"
-          className="w-8 h-8 rounded-lg object-cover bg-white flex-shrink-0"
-        />
-        <AnimatePresence>
-          {sidebarOpen && (
-            <motion.div
-              initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-            >
-              <div className="text-white font-bold text-[14px] leading-tight">BBC CRM</div>
-              <div className="text-slate-500 text-[10.5px]">Team Workspace</div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {sidebarOpen ? (
+          // The artwork is a padded 16:9 banner — scale and offset it so only the logo shows.
+          <div className="relative flex-1 min-w-0 h-[62px] overflow-hidden rounded-lg" style={{ background: '#141d2e' }}>
+            <img
+              src="/sidebar_bbcCRM.png"
+              alt="BizzBuzz Creations CRM"
+              className="absolute max-w-none select-none"
+              style={{ width: '124%', left: '-12.5%', top: '-41px' }}
+              draggable={false}
+            />
+          </div>
+        ) : (
+          <img
+            src="/Tab_logo.png"
+            alt="BBC"
+            className="w-8 h-8 rounded-lg object-cover bg-white flex-shrink-0"
+          />
+        )}
       </div>
+
+      {/* Collapse toggle — centred exactly on the sidebar's right border line */}
+      <button
+        onClick={toggleSidebar}
+        title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        className="absolute top-5 right-0 translate-x-1/2 z-10 w-6 h-8 flex items-center justify-center rounded-md bg-slate-800 border border-slate-600 text-slate-200 shadow-md hover:text-white hover:bg-indigo-600 hover:border-indigo-500 transition-colors"
+      >
+        {sidebarOpen ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+      </button>
 
       {/* ── Timer — members only (not clients) ── */}
       {isMember && !isClient && <MemberTimer open={sidebarOpen} />}

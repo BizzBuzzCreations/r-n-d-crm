@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { ChevronLeft, ChevronRight, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, X } from 'lucide-react';
 import useAppStore from '../store/useAppStore';
 import { Page, Modal, Button } from '../components/ui';
-import { getCalendarDays, cn } from '../utils/helpers';
+import { getCalendarDays, cn, localDateStr } from '../utils/helpers';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -24,7 +24,7 @@ const PLATFORM_ICON = { facebook_page: Facebook, instagram_business: Instagram, 
 
 function postDateKey(post) {
   const d = post.scheduledAt || post.createdAt;
-  return new Date(d).toISOString().split('T')[0];
+  return localDateStr(new Date(d));
 }
 
 export default function SocialCalendarPage() {
@@ -35,7 +35,7 @@ export default function SocialCalendarPage() {
   })));
 
   const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = localDateStr(today);
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
   const [selectedPost, setSelectedPost] = useState(null);
@@ -79,7 +79,7 @@ export default function SocialCalendarPage() {
         </div>
         <div className="grid grid-cols-7">
           {days.map(({ date, current }, i) => {
-            const dateStr = date.toISOString().split('T')[0];
+            const dateStr = localDateStr(date);
             const dayPosts = postsByDate[dateStr] || [];
             const isToday = dateStr === todayStr;
             return (

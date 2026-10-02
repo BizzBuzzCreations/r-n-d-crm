@@ -13,7 +13,7 @@ import {
   Page, Button, PriorityBadge, Avatar, Modal, Input, Select,
   Textarea, EmptyState, ConfirmDialog, DropdownMenu, Badge, StatusBadge, ViewToggle,
 } from '../components/ui';
-import { cn, PRIORITY_CONFIG, canManage, truncate, getId, sameId } from '../utils/helpers';
+import { cn, PRIORITY_CONFIG, canManage, truncate, getId, sameId, localDateStr } from '../utils/helpers';
 import GanttView from '../components/GanttView';
 
 const MEMBER_STATUSES = [
@@ -67,7 +67,7 @@ function DateFilter({ value, onChange }) {
 }
 
 // ── Today's date string ─────────────────────────────────────────
-const todayStr = () => new Date().toISOString().split('T')[0];
+const todayStr = () => localDateStr();
 
 // ── Rich Text Editor ──────────────────────────────────────────
 function RichTextEditor({ value, onChange, placeholder = 'Detailed description or notes…' }) {
@@ -821,7 +821,7 @@ export function TodoDetailDrawer({ open, todo, onClose, users, clients, authUser
                             : 'border-transparent bg-slate-100 dark:bg-slate-700/50 text-slate-600 dark:text-slate-400 hover:border-slate-200'
                         )}
                       >
-                        <Avatar user={u} size="xs" />
+                        <Avatar user={u} size="xs" preview={false} />
                         <span>{u.name.split(' ')[0]}</span>
                         {sameId(u, authUser) && <span className="text-[10px] opacity-50 font-normal">(you)</span>}
                       </button>
