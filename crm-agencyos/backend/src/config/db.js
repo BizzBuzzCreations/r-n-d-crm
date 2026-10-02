@@ -94,6 +94,30 @@ const connectDB = async () => {
         console.log(`🧹 Task Self-Healing: Assigned sequence numbers up to #${nextSeq} successfully`);
       }
 
+      // One-time migration (guarded by a Counter marker, same idempotency pattern as below):
+      // members now see "Clients & Projects" (read-only) instead of "Leads Pipeline".
+      // The role lists saved in SystemSettings.featureAccess override the code defaults, so
+      // changing the defaults alone never reaches an existing database — patch the saved rules
+      // exactly once. After this runs, admins stay free to change them in Settings -> Feature
+      // Access Control and it won't be overwritten on later restarts.
+      const memberNavMarker = await Counter.findOne({ id: 'migration:memberClientsNav' }).lean();
+      if (!memberNavMarker) {
+        const cur = await SystemSettings.findOne().lean();
+        const fa = cur?.featureAccess || {};
+        const patchFA = {};
+        if (fa.clients && !(fa.clients.roles || []).includes('member')) {
+          patchFA['featureAccess.clients.roles'] = [...(fa.clients.roles || []), 'member'];
+        }
+        if (fa.leads && (fa.leads.roles || []).includes('member')) {
+          patchFA['featureAccess.leads.roles'] = fa.leads.roles.filter((r) => r !== 'member');
+        }
+        if (cur && Object.keys(patchFA).length > 0) {
+          await SystemSettings.updateOne({ _id: cur._id }, { $set: patchFA });
+          console.log(`🔧 Feature access: members now get Clients & Projects instead of Leads Pipeline (${Object.keys(patchFA).join(', ')})`);
+        }
+        await Counter.create({ id: 'migration:memberClientsNav', seq: 1 });
+      }
+
       // Lead leadId counter migration — Lead.getNextLeadNumber() switched
       // from a scan-and-compute-max approach (raced under concurrent
       // creates) to an atomic Counter increment. The shared Counter's seq

@@ -103,9 +103,15 @@ api.interceptors.response.use(
 export default api;
 
 // Turn a stored avatar value (e.g. "/uploads/avatars/x.png") into a loadable URL.
+const MEDIA_PATH = /^\/uploads\/(avatars|leaves)\/([^/?#]+)$/;
 export const avatarUrl = (avatar) => {
   if (!avatar) return null;
-  return /^(https?:|data:|blob:)/.test(avatar) ? avatar : `${getBackendUrl()}${avatar}`;
+  if (/^(https?:|data:|blob:)/.test(avatar)) return avatar;
+  // Profile pictures / leave attachments go through the /api/media route (see backend app.js)
+  // because /uploads/* isn't reliably reachable through the production reverse proxy.
+  const m = MEDIA_PATH.exec(avatar);
+  if (m) return `${BASE}/media?d=${m[1]}&f=${encodeURIComponent(m[2])}`;
+  return `${getBackendUrl()}${avatar}`;
 };
 
 // ─────────────────────────────────────────────────────────────

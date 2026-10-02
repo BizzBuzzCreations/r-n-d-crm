@@ -102,6 +102,24 @@ if (process.env.NODE_ENV !== 'production') {
 // ── Static files (uploaded attachments) ────────────────────
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
+// Profile pictures + leave attachments are also served from /api/media?d=<dir>&f=<file>.
+// In production nginx only reliably forwards /api/* to this process, and its static-asset rules
+// (e.g. "*.png" caching) can swallow /uploads/*.png before it ever reaches Express — so a photo
+// that uploads fine can still render as a broken image. An extension-less /api path avoids that.
+// Whitelisted directories only; the filename is reduced to its basename (no path traversal).
+const MEDIA_DIRS = {
+  avatars: path.join(__dirname, '../uploads/avatars'),
+  leaves:  path.join(__dirname, '../uploads/leaves'),
+};
+app.get('/api/media', (req, res) => {
+  const dir  = MEDIA_DIRS[String(req.query.d || '')];
+  const file = path.basename(String(req.query.f || ''));
+  if (!dir || !file || file.startsWith('.')) return res.status(404).end();
+  // Filenames are unique per upload (timestamp), so they can be cached forever.
+  res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  res.sendFile(path.join(dir, file), (err) => { if (err && !res.headersSent) res.status(404).end(); });
+});
+
 // ── Website Intelligence tracking snippet — embedded on the 5 tracked
 // sites via <script src=".../wit.js" data-tracking-id="..." async>. Served
 // with CORS wide open (any site can load it — that's the point of a
