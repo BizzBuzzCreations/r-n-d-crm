@@ -41,11 +41,12 @@ async function statsFor(campaignId) {
   return stats;
 }
 
-// POST /api/campaigns/upload-image — embeds an image in the rich-text email body
+// POST /api/campaigns/upload-image — embeds an image in the rich-text email body.
+// Returned via /api/media because prod nginx serves /uploads/*.png as the SPA index.html (broken image).
 exports.uploadImage = async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, message: 'No image uploaded' });
-    res.status(201).json({ success: true, data: { url: `/uploads/${req.file.filename}` } });
+    res.status(201).json({ success: true, data: { url: `/api/media?d=files&f=${encodeURIComponent(req.file.filename)}` } });
   } catch (err) { next(err); }
 };
 
