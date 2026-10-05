@@ -16,7 +16,8 @@
     "social-publish-worker:dev": "nodemon src/workers/socialPublishWorker.js",
     "seed": "node src/seed.js",
     "backfill-lead-sync": "node src/backfillLeadPipelineSync.js",
-    "admin": "node src/adminData.js"
+    "admin": "node src/adminData.js",
+    "create-admin": "node src/createAdmin.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
