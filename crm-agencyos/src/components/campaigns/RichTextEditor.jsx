@@ -194,7 +194,7 @@ function styleObjToStr(obj) {
 }
 
 // ── Resizable, positionable image node view ──────────────────────────────
-function ResizableImageView({ node, updateAttributes, selected }) {
+function ResizableImageView({ node, updateAttributes, selected, editor }) {
   const imgRef = useRef(null);
   const styleObj = parseStyleStr(node.attrs.style);
 
@@ -225,21 +225,14 @@ function ResizableImageView({ node, updateAttributes, selected }) {
     window.addEventListener('mouseup', onUp);
   };
 
-  const setAlign = (align) => {
-    const margins = align === 'center' ? { 'margin-left': 'auto', 'margin-right': 'auto' }
-      : align === 'right' ? { 'margin-left': 'auto', 'margin-right': '0' }
-      : { 'margin-left': '0', 'margin-right': 'auto' };
-    updateAttributes({ style: styleObjToStr({ ...styleObj, display: 'block', ...margins }) });
-  };
+  // Images are inline nodes (so a surrounding <a> link mark can attach), which
+  // means they're positioned by their paragraph's text-align, not by margins.
+  const setAlign = (align) => editor.chain().focus().setTextAlign(align).run();
 
   return (
-    // `fit-content` only when the image has an explicit pixel width. With the
-    // default `max-width:100%` style, a fit-content wrapper and a percentage
-    // max-width depend on each other, so the wrapper collapses to 0px wide and
-    // the image is invisible in the visual editor (while still in the HTML).
     <NodeViewWrapper
-      as="div"
-      style={{ position: 'relative', maxWidth: '100%', width: styleObj.width ? 'fit-content' : undefined }}
+      as="span"
+      style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', verticalAlign: 'bottom' }}
       data-drag-handle
     >
       {selected && (
@@ -280,7 +273,13 @@ function ResizableImageView({ node, updateAttributes, selected }) {
 // configured default, which (being max-width:100%) blows images up to fill
 // the editor. Extend it to actually keep whatever size the source HTML had,
 // and give it a NodeView with a drag handle + alignment controls.
+// `inline: true` is what lets an <a> wrap the image: Link is a mark, and
+// ProseMirror only allows marks on inline content — with a block image node
+// the link was silently dropped on parse, so clickable logos/icons pasted as
+// <a><img></a> lost their href.
 const ImageExt = TiptapImage.extend({
+  inline: true,
+  group: 'inline',
   addAttributes() {
     return {
       ...this.parent?.(),
