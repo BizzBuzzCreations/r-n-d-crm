@@ -232,7 +232,15 @@ function ResizableImageView({ node, updateAttributes, selected }) {
   };
 
   return (
-    <NodeViewWrapper as="div" style={{ position: 'relative', width: 'fit-content' }} data-drag-handle>
+    // `fit-content` only when the image has an explicit pixel width. With the
+    // default `max-width:100%` style, a fit-content wrapper and a percentage
+    // max-width depend on each other, so the wrapper collapses to 0px wide and
+    // the image is invisible in the visual editor (while still in the HTML).
+    <NodeViewWrapper
+      as="div"
+      style={{ position: 'relative', maxWidth: '100%', width: styleObj.width ? 'fit-content' : undefined }}
+      data-drag-handle
+    >
       {selected && (
         <div className="absolute -top-9 left-0 flex gap-0.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md shadow-modal p-0.5 z-10">
           <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setAlign('left')} className="w-6 h-6 flex items-center justify-center rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700" title="Align left">
