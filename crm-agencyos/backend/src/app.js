@@ -110,6 +110,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 const MEDIA_DIRS = {
   avatars: path.join(__dirname, '../uploads/avatars'),
   leaves:  path.join(__dirname, '../uploads/leaves'),
+  files:   path.join(__dirname, '../uploads'), // campaign email images (flat uploads dir)
 };
 app.get('/api/media', (req, res) => {
   const dir  = MEDIA_DIRS[String(req.query.d || '')];
