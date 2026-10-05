@@ -8,6 +8,7 @@ import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
 import { Image as TiptapImage } from '@tiptap/extension-image';
 import { TextStyle } from '@tiptap/extension-text-style';
+import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 import Color from '@tiptap/extension-color';
 import TextAlign from '@tiptap/extension-text-align';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -316,6 +317,27 @@ const LinkExt = Link.extend({
   },
 });
 
+// Email-layout tables (e.g. social-icon rows: <td><a><img></a></td><td>…</td>)
+// need to survive the editor's schema. Without a table node the <table>/<td>
+// wrappers are dropped on parse, and the icons collapse into a vertical stack
+// of blocks. These helpers keep the attributes email clients rely on.
+const passthroughAttr = (name) => ({
+  default: null,
+  parseHTML: (element) => element.getAttribute(name),
+  renderHTML: (attributes) => (attributes[name] != null ? { [name]: attributes[name] } : {}),
+});
+const withEmailAttrs = (ext, names) => ext.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      ...Object.fromEntries(names.map((n) => [n, passthroughAttr(n)])),
+    };
+  },
+});
+const TableExt = withEmailAttrs(Table, ['style', 'role', 'cellpadding', 'cellspacing', 'border', 'width', 'align']);
+const TableCellExt = withEmailAttrs(TableCell, ['style', 'align', 'valign', 'width']);
+const TableHeaderExt = withEmailAttrs(TableHeader, ['style', 'align', 'valign', 'width']);
+
 function ToolbarButton({ active, onClick, disabled, title, children }) {
   return (
     <button
@@ -534,6 +556,10 @@ const RichTextEditor = forwardRef(function RichTextEditor({ value, onChange, onU
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       LinkExt.configure({ openOnClick: false, autolink: false }),
       ImageExt,
+      TableExt.configure({ resizable: false }),
+      TableRow,
+      TableCellExt,
+      TableHeaderExt,
       Placeholder.configure({ placeholder: placeholder || 'Write your email…' }),
       SnippetExpander.configure({ getSnippets: () => snippetsRef.current }),
     ],
