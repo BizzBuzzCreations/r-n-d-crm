@@ -22,6 +22,7 @@ const authRouter = express.Router();
 authRouter.post('/login',    loginLimiter, auth.login);
 authRouter.post('/logout',   auth.logout);
 authRouter.post('/refresh',  auth.refresh);
+authRouter.get('/sso',      loginLimiter, require('../controllers/ssoController').ssoLogin); // Admin Portal SSO
 authRouter.get('/me',        protect, auth.me);
 authRouter.put('/profile',   protect, auth.updateProfile);
 authRouter.put('/password',  protect, auth.changePassword);

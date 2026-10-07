@@ -1732,7 +1732,24 @@ const useAppStore = create((set, get, store) => ({
 
   // Restore session on page reload using stored token
   restoreSession: async () => {
-    const token = localStorage.getItem('crm_access_token');
+    let token = localStorage.getItem('crm_access_token');
+
+    // Admin Portal SSO: /api/auth/sso has just set the refreshToken cookie and
+    // sent us here with ?sso=1 — swap that cookie for an access token.
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('sso')) {
+      params.delete('sso');
+      const qs = params.toString();
+      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : ''));
+      try {
+        const { data } = await authAPI.refresh();
+        if (data?.accessToken) {
+          localStorage.setItem('crm_access_token', data.accessToken);
+          token = data.accessToken;
+        }
+      } catch { /* fall through to the normal login page */ }
+    }
+
     if (!token) return false;
     try {
       const { data } = await authAPI.me();
