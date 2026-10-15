@@ -1258,6 +1258,24 @@ const useAppStore = create((set, get, store) => ({
       throw err;
     }
   },
+  // Push audited prospects into an email campaign as leads carrying their
+  // audit snapshot (see backend prospectAuditController.pushToCampaign).
+  pushProspectsToCampaign: async (batchId, body) => {
+    try {
+      const { data } = await prospectAuditsAPI.pushToCampaign(batchId, body);
+      const r = data.data || {};
+      const extra = [
+        r.skippedDuplicate ? `${r.skippedDuplicate} already in the campaign` : '',
+        r.skippedNoFindings ? `${r.skippedNoFindings} with no audit findings` : '',
+      ].filter(Boolean).join(', ');
+      toast.success(`${r.created} lead${r.created === 1 ? '' : 's'} added to "${r.campaignName}"${extra ? ` — skipped ${extra}` : ''}`);
+      return r;
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to push prospects to campaign');
+      throw err;
+    }
+  },
+
   importProspectAuditsSheet: async (batchId, googleSheetUrl) => {
     try {
       const { data } = await prospectAuditsAPI.importSheet(batchId, googleSheetUrl);

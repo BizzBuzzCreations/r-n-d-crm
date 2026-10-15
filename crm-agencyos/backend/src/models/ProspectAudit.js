@@ -89,6 +89,27 @@ const ProspectAuditSchema = new mongoose.Schema({
   needsRecrawl: { type: Boolean, default: false },
 
   // ── Output ──────────────────────────────────────────────────────────
+  // Ranked, human-readable proof points built by utils/auditFindings.js from
+  // the measurements above. These are what a campaign email actually quotes
+  // (via the {{top_finding}} / {{findings_list}} merge tags), so they are
+  // generated once at crawl time and then travel with the lead as a
+  // point-in-time snapshot — see CampaignLead.auditSnapshot.
+  findings: {
+    type: [{
+      _id:      false,
+      code:     { type: String, default: '' },
+      angle:    { type: String, default: '' },
+      severity: { type: Number, default: 0 },
+      title:    { type: String, default: '' },
+      sentence: { type: String, default: '' },
+    }],
+    default: [],
+  },
+  // Denormalised highest-ranked sentence, so the common case needs no array
+  // access in the sender's hot path.
+  topFinding:      { type: String, default: '' },
+  topFindingAngle: { type: String, default: '' },
+
   technicalScore:   { type: Number, default: null },
   opportunityScore: { type: Number, default: null },
   tier:             { type: String, enum: ['hot', 'high', 'medium', 'low', 'skip', 'no_site', null], default: null },

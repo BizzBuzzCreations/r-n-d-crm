@@ -468,6 +468,11 @@ export const prospectAuditsAPI = {
     return api.post(`/prospect-audits/${id}/import`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
   importSheet: (id, googleSheetUrl) => api.post(`/prospect-audits/${id}/import`, { googleSheetUrl }),
+
+  // Creates CampaignLeads from this batch's audited prospects, each carrying
+  // an audit snapshot the campaign's merge tags can quote. Requires both the
+  // prospect_audit and campaigns features.
+  pushToCampaign: (id, body) => api.post(`/prospect-audits/${id}/push-to-campaign`, body),
 };
 
 // ─────────────────────────────────────────────────────────────

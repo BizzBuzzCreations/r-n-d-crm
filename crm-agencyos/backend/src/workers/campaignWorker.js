@@ -103,17 +103,63 @@ function buildResponseOptionsHtml(options, token) {
   return `<div style="margin:16px 0;">${links}</div>`;
 }
 
-function renderMergeTags(template, lead, responseOptions) {
+// Everything substituted into an email body is HTML-escaped. Lead fields come
+// from imported CSVs and public forms, and audit sentences embed values read
+// off the prospect's own page — none of it should be able to inject markup
+// into the email (or into the campaign preview that renders the same HTML).
+const esc = (v) => String(v ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+// ── Website-audit merge tags ──────────────────────────────────────────────
+// Populated only for leads pushed over from a Prospect Audit batch (see
+// CampaignLead.auditSnapshot). A campaign body that uses these is refused at
+// start time unless its pending leads actually carry a snapshot
+// (utils/campaignReadiness.js), and the dispatcher fails any individual lead
+// that slipped through — an email reading "takes undefined seconds" is worse
+// than no email at all.
+function renderAuditTags(template, lead) {
+  const a = lead.auditSnapshot || {};
+  const findings = Array.isArray(a.findings) ? a.findings : [];
+  const lcp = a.lcpMs != null ? (Math.round(a.lcpMs / 100) / 10).toFixed(1) : '';
+  const mb  = a.pageWeightKb != null ? (Math.round(a.pageWeightKb / 102.4) / 10).toFixed(1) : '';
+
+  const list = findings.length
+    ? `<ul style="margin:12px 0;padding-left:20px;">${findings
+      .map((f) => `<li style="margin:4px 0;">${esc(f.sentence)}</li>`).join('')}</ul>`
+    : '';
+
   return String(template || '')
+    .replace(/\{\{\s*top_finding\s*\}\}/gi, esc(a.topFinding || findings[0]?.sentence || ''))
+    .replace(/\{\{\s*finding_2\s*\}\}/gi, esc(findings[1]?.sentence || ''))
+    .replace(/\{\{\s*finding_3\s*\}\}/gi, esc(findings[2]?.sentence || ''))
+    .replace(/\{\{\s*findings_list\s*\}\}/gi, list)
+    .replace(/\{\{\s*perf_score\s*\}\}/gi, a.perfMobile != null ? String(a.perfMobile) : '')
+    .replace(/\{\{\s*perf_desktop\s*\}\}/gi, a.perfDesktop != null ? String(a.perfDesktop) : '')
+    .replace(/\{\{\s*seo_score\s*\}\}/gi, a.seoScore != null ? String(a.seoScore) : '')
+    .replace(/\{\{\s*lcp_seconds\s*\}\}/gi, lcp)
+    .replace(/\{\{\s*page_weight_mb\s*\}\}/gi, mb)
+    .replace(/\{\{\s*website\s*\}\}/gi, esc(a.website || ''))
+    .replace(/\{\{\s*audit_tier\s*\}\}/gi, esc(a.tier || ''));
+}
+
+function renderMergeTags(template, lead, responseOptions) {
+  return renderAuditTags(String(template || ''), lead)
     // businessName wins when present (B2B import format — see
     // CampaignLead.businessName) so a template author writes {{first_name}}
     // exactly once, phrases the greeting however fits both cases (e.g. "Hi
     // team at {{first_name}}," reads correctly whether that resolves to a
     // person's first name or a company name), and never needs to know or
     // care which import format a given lead came from.
-    .replace(/\{\{\s*first_?name\s*\}\}/gi, lead.businessName || lead.firstName || 'there')
-    .replace(/\{\{\s*last_?name\s*\}\}/gi, lead.lastName || '')
-    .replace(/\{\{\s*email\s*\}\}/gi, lead.email || '')
+    // esc()-wrapped: these arrive from imported CSVs and Google Sheets, so an
+    // ampersand or a stray tag in a business name would otherwise land raw in
+    // the email HTML.
+    .replace(/\{\{\s*first_?name\s*\}\}/gi, esc(lead.businessName || lead.firstName || 'there'))
+    .replace(/\{\{\s*last_?name\s*\}\}/gi, esc(lead.lastName || ''))
+    .replace(/\{\{\s*email\s*\}\}/gi, esc(lead.email || ''))
     // Generic tracked-CTA redirect tag — lets a campaign's own template
     // design any button wherever it wants (e.g. `<a href="{{redirect_url}}">
     // Request a Call</a>`), not just this one "Request a Call" use case.

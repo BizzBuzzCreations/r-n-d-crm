@@ -400,6 +400,13 @@ prospectAuditsRouter.delete('/:id',                        prospectAuditCtrl.del
 prospectAuditsRouter.post('/:id/import',                   upload.single('file'), prospectAuditCtrl.importProspects);
 prospectAuditsRouter.get('/:id/prospects',                 prospectAuditCtrl.getProspects);
 prospectAuditsRouter.delete('/:id/prospects/:prospectId',  prospectAuditCtrl.deleteProspect);
+// Pushes audited prospects into an email campaign as CampaignLeads carrying
+// an audit snapshot (see prospectAuditController.pushToCampaign). Gated by
+// BOTH features — it reads prospect audits and writes campaign leads, so
+// holding only one of the two shouldn't be enough.
+prospectAuditsRouter.post('/:id/push-to-campaign',
+  authorizeFeature('campaigns', ['admin', 'manager']),
+  prospectAuditCtrl.pushToCampaign);
 prospectAuditsRouter.post('/:id/start',                    prospectAuditCtrl.startCrawl);
 prospectAuditsRouter.post('/:id/pause',                    prospectAuditCtrl.pauseCrawl);
 module.exports.prospectAudits = prospectAuditsRouter;

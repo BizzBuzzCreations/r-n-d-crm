@@ -8,7 +8,7 @@ const Campaign = require('../models/Campaign');
 const { syncCampaignLeadToPipeline } = require('../utils/leadPipelineSync');
 const notifService = require('../services/notificationService');
 const { notifyMainCrm } = require('../utils/mainCrmNotify');
-const { HOT_OPEN_THRESHOLD, SCANNER_UA_PATTERNS, OPEN_NOTIFICATION_DELAY_GATE_MS } = require('../utils/campaignConstants');
+const { HOT_OPEN_THRESHOLD, LEGACY_RAW_OPEN_THRESHOLD, SCANNER_UA_PATTERNS, OPEN_NOTIFICATION_DELAY_GATE_MS } = require('../utils/campaignConstants');
 
 // 1x1 transparent PNG
 const PIXEL = Buffer.from(
@@ -45,10 +45,34 @@ exports.trackOpen = async (req, res) => {
   ).then(async (updated) => {
     if (!updated) return;
 
+    // Was this particular hit plausibly a person? Same two tests that gate
+    // the "opened" notification further down (known scanner/proxy UA, or a
+    // hit landing suspiciously soon after send). Evaluated here too because
+    // the qualified counter — not the raw one — is what decides "hot", and
+    // the hot threshold is deliberately low (2).
+    const scannerUA = isLikelyScannerUA(userAgent);
+    const withinDelayGate = !!updated.sentAt && (now - updated.sentAt) < OPEN_NOTIFICATION_DELAY_GATE_MS;
+    const qualifiedOpen = !scannerUA && !withinDelayGate;
+
+    let humanOpens = updated.humanOpenCount || 0;
+    if (qualifiedOpen) {
+      // Separate atomic bump: whether an open qualifies depends on sentAt,
+      // which isn't known until the first update returns, so it can't be
+      // folded into the same $inc.
+      const bumped = await CampaignLead.findOneAndUpdate(
+        { _id: updated._id },
+        { $inc: { humanOpenCount: 1 } },
+        { new: true }
+      ).catch(() => null);
+      humanOpens = bumped?.humanOpenCount ?? humanOpens + 1;
+      if (bumped) updated.humanOpenCount = humanOpens;
+    }
+
     // Called on every open past the threshold, not just the first — safe/
     // idempotent by design (see leadPipelineSync.js), so it can't lose count
-    // under rapid-fire opens racing each other.
-    if (updated.openCount >= HOT_OPEN_THRESHOLD) {
+    // under rapid-fire opens racing each other. The legacy raw-open rule is
+    // OR'd in for leads that predate humanOpenCount (see campaignConstants).
+    if (humanOpens >= HOT_OPEN_THRESHOLD || updated.openCount >= LEGACY_RAW_OPEN_THRESHOLD) {
       syncCampaignLeadToPipeline(updated, 'hot').catch(() => {});
     }
 
@@ -66,9 +90,8 @@ exports.trackOpen = async (req, res) => {
       // sync); only the human-facing "opened" notification is gated here,
       // on a known scanner/proxy UA or a hit landing suspiciously soon
       // after send (bots fetch near-instantly, real readers don't).
-      const scannerUA = isLikelyScannerUA(userAgent);
-      const withinDelayGate = !!updated.sentAt && (now - updated.sentAt) < OPEN_NOTIFICATION_DELAY_GATE_MS;
-
+      // scannerUA / withinDelayGate are computed once above, where they also
+      // decide whether this open counts toward humanOpenCount.
       if (scannerUA || withinDelayGate) {
         const reason = scannerUA ? 'scanner-ua' : 'delay-gate';
         const msSinceSent = updated.sentAt ? now - updated.sentAt : 'n/a';

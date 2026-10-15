@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   ArrowLeft, Upload, FileSpreadsheet, Play, Pause, Download, XCircle, Flame,
   ShieldCheck, ShieldAlert, ShieldQuestion, ShieldOff, Check, X, Eye, Lock, Smartphone,
-  Gauge, FileText, Heading, BarChart3, Megaphone, Map, Rss, Mail as MailIcon, Star, Link2, Globe2,
+  Gauge, FileText, Heading, BarChart3, Megaphone, Map, Rss, Mail as MailIcon, Star, Link2, Globe2, Send,
 } from 'lucide-react';
 import useAppStore from '../store/useAppStore';
 import { Page, Button, Select, StatCard, EmptyState, Modal } from '../components/ui';
@@ -256,6 +256,7 @@ export default function ProspectAuditDetailPage() {
   const navigate = useNavigate();
   const {
     batches, prospects, loadBatch, loadProspects, importCsv, importSheet, startCrawl, pauseCrawl, deleteProspect,
+    campaigns, loadCampaigns, pushToCampaign,
   } = useAppStore(useShallow((s) => ({
     batches: s.prospectAuditBatches,
     prospects: s.prospectAudits,
@@ -266,6 +267,9 @@ export default function ProspectAuditDetailPage() {
     startCrawl: s.startProspectAuditCrawl,
     pauseCrawl: s.pauseProspectAuditCrawl,
     deleteProspect: s.deleteProspectAudit,
+    campaigns: s.campaigns,
+    loadCampaigns: s.loadCampaigns,
+    pushToCampaign: s.pushProspectsToCampaign,
   })));
 
   const batch = batches.find((b) => b._id === id);
@@ -274,6 +278,10 @@ export default function ProspectAuditDetailPage() {
   const [sheetUrl, setSheetUrl] = useState('');
   const [importingSheet, setImportingSheet] = useState(false);
   const [tierFilter, setTierFilter] = useState('all');
+  const [showPush, setShowPush] = useState(false);
+  const [pushCampaignId, setPushCampaignId] = useState('');
+  const [pushTiers, setPushTiers] = useState(['hot', 'high']);
+  const [pushing, setPushing] = useState(false);
   // Store just the id, not the object — re-derived from the live `prospects`
   // list on every render, so the modal reflects a re-crawl or refresh
   // instead of showing a frozen snapshot from the moment it was opened.
@@ -323,6 +331,15 @@ export default function ProspectAuditDetailPage() {
     return s;
   }, [prospects]);
 
+  // Mirrors the backend's own filter in pushToCampaign: crawled OK, has an
+  // email, and has at least one finding to personalise with.
+  const isPushable = (p) => p.crawlStatus === 'ok' && !!p.email && (p.findings || []).length > 0;
+  const pushableCount = useMemo(() => prospects.filter(isPushable).length, [prospects]);
+  const pushSelectedCount = useMemo(
+    () => prospects.filter((p) => isPushable(p) && (!pushTiers.length || pushTiers.includes(p.tier))).length,
+    [prospects, pushTiers],
+  );
+
   const filtered = tierFilter === 'all' ? prospects : prospects.filter((p) => p.tier === tierFilter);
 
   const exportSlug = (batch?.name || 'prospects').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -354,6 +371,15 @@ export default function ProspectAuditDetailPage() {
           {batch.status === 'crawling' && (
             <Button variant="outline" onClick={handleToggleStatus}><Pause size={14} /> Pause</Button>
           )}
+          <Button
+            disabled={!pushableCount}
+            onClick={() => { loadCampaigns(); setShowPush(true); }}
+            title={pushableCount
+              ? `${pushableCount} audited prospect(s) with an email address and at least one finding`
+              : 'No audited prospects with an email address and findings yet'}
+          >
+            <Send size={14} /> Push to Campaign
+          </Button>
           <Button
             variant="outline"
             disabled={!prospects.length}
@@ -494,6 +520,78 @@ export default function ProspectAuditDetailPage() {
       </div>
 
       <ProspectDetailModal prospect={detailProspect} onClose={() => setDetailProspectId(null)} />
+
+      <Modal open={showPush} onClose={() => setShowPush(false)} title="Push prospects to an email campaign">
+        <div className="px-6 py-5 space-y-4">
+          <p className="text-[13px] text-slate-500 dark:text-slate-400">
+            Adds these prospects to a campaign as leads, each carrying its website-audit findings.
+            The campaign's email can then quote them with merge tags like{' '}
+            <code className="text-[12px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{'{{top_finding}}'}</code>{' '}
+            and <code className="text-[12px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{'{{perf_score}}'}</code>.
+          </p>
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Campaign</label>
+            <Select value={pushCampaignId} onChange={(e) => setPushCampaignId(e.target.value)}>
+              <option value="">Select a campaign…</option>
+              {campaigns
+                // Only draft/paused: pushing into a live campaign would start
+                // mailing the new leads within the minute (backend enforces this too).
+                .filter((c) => ['draft', 'paused'].includes(c.status))
+                .map((c) => <option key={c._id} value={c._id}>{c.name} ({c.status})</option>)}
+            </Select>
+            {!campaigns.some((c) => ['draft', 'paused'].includes(c.status)) && (
+              <p className="text-[12px] text-amber-600 dark:text-amber-400 mt-1.5">
+                No draft or paused campaign available — create one, or pause a running campaign first.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Tiers to include</label>
+            <div className="flex flex-wrap gap-2">
+              {['hot', 'high', 'medium', 'low'].map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setPushTiers((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t])}
+                  className={cn(
+                    'px-2.5 py-1 rounded-full text-[12px] font-semibold border transition-colors',
+                    pushTiers.includes(t)
+                      ? 'bg-primary-600 text-white border-primary-600'
+                      : 'border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300',
+                  )}
+                >
+                  {TIER_BADGE[t]?.label || t} ({stats[t] || 0})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="text-[13px] text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/50 rounded-lg px-3 py-2">
+            <strong>{pushSelectedCount}</strong> prospect{pushSelectedCount === 1 ? '' : 's'} will be added.
+            Prospects with no email address, no audit findings, or already in the campaign are skipped.
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <Button variant="outline" onClick={() => setShowPush(false)}>Cancel</Button>
+            <Button
+              disabled={!pushCampaignId || !pushSelectedCount || pushing}
+              onClick={async () => {
+                setPushing(true);
+                try {
+                  await pushToCampaign(id, { campaignId: pushCampaignId, tiers: pushTiers });
+                  setShowPush(false);
+                } catch { /* store already surfaced the error */ } finally {
+                  setPushing(false);
+                }
+              }}
+            >
+              <Send size={14} /> {pushing ? 'Adding…' : `Add ${pushSelectedCount} lead${pushSelectedCount === 1 ? '' : 's'}`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </Page>
   );
 }

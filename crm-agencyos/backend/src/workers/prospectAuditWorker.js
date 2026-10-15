@@ -40,6 +40,7 @@ const ProspectAudit = require('../models/ProspectAudit');
 const ProspectAuditBatch = require('../models/ProspectAuditBatch');
 const { SystemSettings } = require('../models/index');
 const { calculateProspectScores } = require('../utils/prospectScoring');
+const { buildFindings } = require('../utils/auditFindings');
 
 mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 8000 })
   .then(() => console.log('✅ MongoDB connected (prospect audit worker)'))
@@ -369,6 +370,15 @@ const worker = new Worker('prospect-audit-queue', async (job) => {
     Object.assign(prospect, tier1, tier2, { crawlStatus: 'ok', crawledAt: new Date(), crawlError: '' });
     const scores = calculateProspectScores(prospect);
     Object.assign(prospect, scores);
+
+    // Built here, at crawl time, from the measurements just taken — so the
+    // sentences a campaign email will quote are always derived from the same
+    // data that produced the score shown in the UI.
+    const findings = buildFindings(prospect);
+    prospect.findings = findings;
+    prospect.topFinding = findings[0]?.sentence || '';
+    prospect.topFindingAngle = findings[0]?.angle || '';
+
     await prospect.save();
 
     await ProspectAuditBatch.updateOne({ _id: prospect.batch }, { $inc: { crawledCount: 1 } });

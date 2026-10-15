@@ -236,3 +236,136 @@ exports.pauseCrawl = async (req, res, next) => {
     res.json({ success: true, data: batch });
   } catch (err) { next(err); }
 };
+
+// ── Bridge: Prospect Audit → Email Campaign ─────────────────────────────
+// POST /api/prospect-audits/:id/push-to-campaign
+// Body: { campaignId, tiers?: ['hot','high'], minOpportunity?, requireFindings? }
+//
+// This is the link that was missing entirely: audits collected ~28 facts per
+// site and campaigns could read none of them, because the only route between
+// the two was a CSV export whose importer keeps 7 columns. Each created
+// CampaignLead carries an embedded auditSnapshot (point-in-time by design —
+// see the model comment) which the sender's merge tags read, so an email can
+// quote measured facts about that prospect's own website.
+exports.pushToCampaign = async (req, res, next) => {
+  try {
+    const Campaign = require('../models/Campaign');
+    const CampaignLead = require('../models/CampaignLead');
+
+    const batch = await ProspectAuditBatch.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
+    if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
+
+    const { campaignId, tiers, minOpportunity, requireFindings = true } = req.body || {};
+    if (!campaignId) return res.status(400).json({ success: false, message: 'campaignId is required' });
+
+    const campaign = await Campaign.findOne({ _id: campaignId, isDeleted: { $ne: true } });
+    if (!campaign) return res.status(404).json({ success: false, message: 'Campaign not found' });
+    // Pushing into a live campaign would start mailing the new leads within a
+    // minute, before anyone has reviewed the segment or the copy.
+    if (!['draft', 'paused'].includes(campaign.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Campaign is ${campaign.status}. Pause it before pushing new leads in.`,
+      });
+    }
+
+    const query = { batch: batch._id, crawlStatus: 'ok', email: { $nin: ['', null] } };
+    if (Array.isArray(tiers) && tiers.length) query.tier = { $in: tiers.map(String) };
+    if (minOpportunity != null && Number.isFinite(Number(minOpportunity))) {
+      query.opportunityScore = { $gte: Number(minOpportunity) };
+    }
+
+    const prospects = await ProspectAudit.find(query).lean();
+    if (!prospects.length) {
+      return res.status(400).json({ success: false, message: 'No crawled prospects with an email address match those filters' });
+    }
+
+    // Skip prospects with nothing measured worth saying. Sending a
+    // "personalised" email whose personalised part is blank is worse than not
+    // sending — opt out with requireFindings: false for a generic template.
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const seen = new Set();
+    const candidates = [];
+    let skippedNoFindings = 0;
+    let skippedInvalidEmail = 0;
+
+    for (const p of prospects) {
+      const email = String(p.email || '').trim().toLowerCase();
+      if (!EMAIL_RE.test(email) || seen.has(email)) { skippedInvalidEmail++; continue; }
+      if (requireFindings && !(p.findings || []).length) { skippedNoFindings++; continue; }
+      seen.add(email);
+      candidates.push({ p, email });
+    }
+
+    if (!candidates.length) {
+      return res.status(400).json({
+        success: false,
+        message: requireFindings
+          ? 'No prospects had any audit findings to personalise with. Re-crawl the batch, or push with requireFindings disabled.'
+          : 'No prospects had a valid email address.',
+      });
+    }
+
+    // Don't duplicate leads already in this campaign (the campaign+email
+    // unique index would reject the whole insertMany otherwise).
+    const existing = await CampaignLead.find(
+      { campaign: campaign._id, email: { $in: candidates.map((c) => c.email) } }, 'email'
+    ).lean();
+    const existingSet = new Set(existing.map((e) => e.email));
+
+    const toInsert = candidates
+      .filter((c) => !existingSet.has(c.email))
+      .map(({ p, email }) => ({
+        campaign: campaign._id,
+        email,
+        businessName: p.businessName || '',
+        businessType: p.businessType || '',
+        cityLocation: p.cityLocation || '',
+        phone: p.phone || '',
+        auditSnapshot: {
+          prospectId:       p._id,
+          auditedAt:        p.crawledAt || null,
+          website:          p.website || '',
+          tier:             p.tier || '',
+          technicalScore:   p.technicalScore ?? null,
+          opportunityScore: p.opportunityScore ?? null,
+          perfMobile:       p.psiPerformanceScore ?? null,
+          perfDesktop:      p.psiPerformanceScoreDesktop ?? null,
+          seoScore:         p.psiSeoScore ?? null,
+          lcpMs:            p.coreWebVitals?.lcp ?? null,
+          pageWeightKb:     p.pageWeightKb ?? null,
+          topFinding:       p.topFinding || '',
+          primaryAngle:     p.topFindingAngle || '',
+          findings: (p.findings || []).map((f) => ({
+            code: f.code, angle: f.angle, sentence: f.sentence,
+          })),
+        },
+      }));
+
+    let created = [];
+    if (toInsert.length) created = await CampaignLead.insertMany(toInsert, { ordered: false });
+
+    audit.log(req, {
+      action: 'create', category: 'campaign',
+      targetId: campaign._id, targetModel: 'Campaign', targetTitle: campaign.name,
+      metadata: {
+        pushedFromBatch: String(batch._id),
+        created: created.length,
+        skippedDuplicate: candidates.length - toInsert.length,
+        skippedNoFindings,
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        created: created.length,
+        skippedDuplicate: candidates.length - toInsert.length,
+        skippedNoFindings,
+        skippedInvalidEmail,
+        campaignId: String(campaign._id),
+        campaignName: campaign.name,
+      },
+    });
+  } catch (err) { next(err); }
+};
