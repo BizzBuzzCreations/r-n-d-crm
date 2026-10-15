@@ -1888,7 +1888,13 @@ const useAppStore = create((set, get, store) => ({
       const [uR, cR, tR, dR, mR, nR, chR, svR, pR, lR, setR] = await Promise.all([
         usersAPI.getAll(), clientsAPI.getAll(), tasksAPI.getAll(), todosAPI.getAll(), meetingsAPI.getAll(),
         notificationsAPI.getAll(), channelsAPI.getAll(), servicesAPI.getAll(), projectsAPI.getAll(),
-        leadsAPI.getAll(),
+        // Tolerate a 403 here the same way settings does below. 'leads' is an
+        // admin-configurable feature (Settings → Feature Access Control) and
+        // members are deliberately excluded from it, so for them this call
+        // legitimately fails — un-caught inside Promise.all it rejects the
+        // whole batch, leaving users/tasks/todos/clients/messages unset and
+        // the entire app empty for every member.
+        leadsAPI.getAll().catch(() => ({ data: { data: [] } })),
         settingsAPI.get().catch(() => ({ data: { data: null } }))
       ]);
       const users = uR.data.data;

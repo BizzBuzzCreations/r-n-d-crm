@@ -1,7 +1,9 @@
 const jwt  = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const { Channel, Task, Project } = require('../models/index');
 const { getChannelAccess } = require('../utils/channelAccess');
+const { userHasFeature } = require('../middleware/authorizeFeature');
 
 const disconnectTimeouts = new Map();
 
@@ -40,6 +42,22 @@ module.exports = (io) => {
     if (socket.user.role === 'admin') {
       socket.join('admin');
     }
+    // Internal staff only — used for config broadcasts (settings:updated)
+    // that portal logins have no use for and shouldn't receive.
+    if (socket.user.role !== 'client') {
+      socket.join('staff');
+    }
+
+    // Lead events used to go out via a bare io.emit(), i.e. to EVERY
+    // authenticated socket — client-portal logins and staff with no leads
+    // access included — carrying the whole Lead document (contacts, notes,
+    // deal value). They're emitted to this room instead now. Membership is
+    // decided by the same Feature Access Control rule the REST routes use.
+    // Evaluated once per connection, so a rule change takes effect for a
+    // given user on their next reconnect.
+    userHasFeature(socket.user, 'leads', ['admin', 'manager', 'client_relations'])
+      .then((ok) => { if (ok) socket.join('leads'); })
+      .catch(() => {});
 
     // ── System log streaming (admin only) ─────────────────────
     socket.on('system:logs:subscribe', () => {
@@ -132,9 +150,31 @@ module.exports = (io) => {
       return threadId;
     };
 
+    // Only two room shapes are ever legitimate for a client to ask for: a
+    // DM room this user is one of the two participants of, or a Channel
+    // ObjectId. Everything else is refused by shape, BEFORE getChannelAccess
+    // is consulted — that helper deliberately returns allowed:true for
+    // anything that isn't a Channel ObjectId (DMs and legacy string ids are
+    // decided by their own callers), so on its own it would wave through the
+    // reserved rooms this server emits to: `admin:syslog` (live server log
+    // stream), `admin` (admin-only broadcasts) and `user:<id>` (any other
+    // user's private notification/timer/role feed). Those are plain strings,
+    // so without this check any authenticated socket — including a client
+    // portal login — could join them just by naming them.
+    const isJoinableRoom = (room, user) => {
+      if (room.startsWith('dm-')) {
+        const parts = room.slice(3).split('-');
+        // Canonical form is `dm-<sortedIdA>-<sortedIdB>` — our own id must be one of them.
+        if (parts.length !== 2 || !parts.includes(String(user._id))) return false;
+        return true;
+      }
+      return mongoose.isValidObjectId(room);
+    };
+
     // ── Join rooms ────────────────────────────────────────
     socket.on('join:thread', async (threadId) => {
       const room = getCanonicalRoom(threadId, socket.user);
+      if (!isJoinableRoom(room, socket.user)) return;
       // For clients: only join DM rooms they're already authorised for (joined at connect time)
       if (socket.user.role === 'client' && room.startsWith('dm-') && !socket.rooms.has(room)) {
         return; // silently reject unauthorised DM join
@@ -154,6 +194,9 @@ module.exports = (io) => {
     // ── Typing indicators ─────────────────────────────────
     socket.on('typing:start', ({ threadId }) => {
       const room = getCanonicalRoom(threadId, socket.user);
+      // Same room-shape gate as join:thread — otherwise typing events could
+      // be sprayed into `admin`/`admin:syslog`/`user:<id>` by any socket.
+      if (!isJoinableRoom(room, socket.user)) return;
       socket.to(room).emit('typing:start', {
         userId,
         name: socket.user.name,
@@ -163,6 +206,7 @@ module.exports = (io) => {
 
     socket.on('typing:stop', ({ threadId }) => {
       const room = getCanonicalRoom(threadId, socket.user);
+      if (!isJoinableRoom(room, socket.user)) return;
       socket.to(room).emit('typing:stop', { userId, threadId: room, name: socket.user.name });
     });
 

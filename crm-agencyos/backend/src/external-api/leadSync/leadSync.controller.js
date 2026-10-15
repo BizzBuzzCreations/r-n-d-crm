@@ -102,7 +102,10 @@ exports.syncLeadStatus = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'externalLeadId is required' });
     }
 
-    const lead = await Lead.findOne({ externalLeadId });
+    // String()-coerced: an API-key holder sending {"$gt": ""} would
+    // otherwise match an arbitrary synced lead and overwrite its status,
+    // deal value and assignee.
+    const lead = await Lead.findOne({ externalLeadId: String(externalLeadId) });
     if (!lead) {
       return res.status(404).json({ success: false, message: 'No rndCRM lead found with that externalLeadId' });
     }

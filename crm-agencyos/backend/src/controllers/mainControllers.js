@@ -18,14 +18,50 @@ function generatePassword() {
 // ═══════════════════════════════════════════════════
 exports.getUsers = async (req, res, next) => {
   try {
+    // Portal logins must never get the full staff directory (every name,
+    // email, phone and emailSync config in the company). This route carries
+    // no feature gate — only `protect` — so a client could simply call it.
+    // The portal's own, properly scoped equivalent is GET /api/portal/contacts
+    // (admins + the team actually assigned to that client), which is what the
+    // portal UI already uses, so nothing legitimate reads this as a client.
+    if (req.user.role === 'client') {
+      return res.status(403).json({ success: false, message: 'Use /api/portal/contacts' });
+    }
     const users = await User.find().sort({ createdAt: 1 });
     res.json({ success: true, data: users });
   } catch (err) { next(err); }
 };
 
+// Fields a privileged caller may set when creating/updating a staff account.
+// Everything else on the schema (clientId, notificationPrefs, status, ...) is
+// either self-service or set by other flows, and passing req.body straight
+// into User.create() let any of it be written from the Team page's request.
+const USER_WRITABLE = ['name', 'email', 'password', 'role', 'position', 'department',
+  'phone', 'color', 'joinDate', 'bio', 'campaignsAccess', 'assignmentSheetTab'];
+
+const pickWritable = (body, allowed) => allowed.reduce((acc, k) => {
+  if (body[k] !== undefined) acc[k] = body[k];
+  return acc;
+}, {});
+
 exports.createUser = async (req, res, next) => {
   try {
-    const user = await User.create(req.body);
+    const payload = pickWritable(req.body, USER_WRITABLE);
+
+    // Only an admin may create another admin. The route allows admin+manager,
+    // so without this a manager could mint a full admin account for
+    // themselves and escalate privileges outright.
+    if (payload.role === 'admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Only an admin can create an admin account' });
+    }
+    // Portal logins are provisioned by the client-creation flow (which links
+    // them to a Client via clientId); minting a bare 'client' user here would
+    // produce an account with portal access and no client to scope it to.
+    if (payload.role === 'client') {
+      return res.status(400).json({ success: false, message: 'Client portal logins are created from the client record' });
+    }
+
+    const user = await User.create(payload);
     audit.log(req, {
       action: 'create', category: 'user',
       targetId: user._id, targetModel: 'User',
@@ -37,7 +73,19 @@ exports.createUser = async (req, res, next) => {
 
 exports.updateUser = async (req, res, next) => {
   try {
-    const { password, ...rest } = req.body;
+    const { password } = req.body;
+    const rest = pickWritable(req.body, USER_WRITABLE.filter((k) => k !== 'password'));
+
+    // An admin account may only be modified by an admin. Role changes were
+    // already admin-only below, but `password` was still accepted from any
+    // caller the route allows — so a manager could set a new password on an
+    // admin account and simply log in as them, bypassing the role guard
+    // entirely. Deleting an admin was open the same way (see deleteUser).
+    const target = await User.findById(req.params.id).select('role name').lean();
+    if (!target) return res.status(404).json({ success: false, message: 'User not found' });
+    if (target.role === 'admin' && req.user.role !== 'admin' && String(req.user._id) !== req.params.id) {
+      return res.status(403).json({ success: false, message: 'Only an admin can modify an admin account' });
+    }
 
     // Only admin can change roles (managers cannot promote/demote)
     if (rest.role && req.user.role !== 'admin') {
@@ -88,6 +136,11 @@ exports.deleteUser = async (req, res, next) => {
     if (String(req.user._id) === req.params.id)
       return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
     const target = await User.findById(req.params.id).lean();
+    // Same boundary as updateUser: a manager must not be able to remove an
+    // admin (nor delete the account and recreate it under their own control).
+    if (target?.role === 'admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Only an admin can delete an admin account' });
+    }
     await User.findByIdAndDelete(req.params.id);
     audit.log(req, {
       action: 'delete', category: 'user',
@@ -101,9 +154,17 @@ exports.deleteUser = async (req, res, next) => {
 // ═══════════════════════════════════════════════════
 // CLIENTS
 // ═══════════════════════════════════════════════════
+// A portal login may only ever see its own company record — without this it
+// received the entire client book (every other client's contacts, internal
+// notes, credit limit and billing notes). Portal reads have their own scoped
+// endpoints under /api/portal; this is the backstop for the shared route.
+const clientScope = (req) => (req.user.role === 'client'
+  ? { _id: req.user.clientId, isDeleted: { $ne: true } }
+  : { isDeleted: { $ne: true } });
+
 exports.getClients = async (req, res, next) => {
   try {
-    const clients = await Client.find({ isDeleted: { $ne: true } })
+    const clients = await Client.find(clientScope(req))
       .populate('assignedTeam', 'name email color initials status position')
       .sort({ createdAt: -1 });
     res.json({ success: true, data: clients });
@@ -112,6 +173,9 @@ exports.getClients = async (req, res, next) => {
 
 exports.getClient = async (req, res, next) => {
   try {
+    if (req.user.role === 'client' && String(req.user.clientId) !== String(req.params.id)) {
+      return res.status(403).json({ success: false, message: 'Not authorized for this client' });
+    }
     const client = await Client.findOne({ _id: req.params.id, isDeleted: { $ne: true } })
       .populate('assignedTeam', 'name email color initials status position');
     if (!client) return res.status(404).json({ success: false, message: 'Client not found' });
@@ -515,6 +579,9 @@ exports.createTask = async (req, res, next) => {
 exports.updateTask = async (req, res, next) => {
   try {
     const prev = await Task.findById(req.params.id).lean();
+    // Every branch below reads prev.* — without this an unknown/deleted id
+    // threw a TypeError and surfaced as a 500 instead of a clean 404.
+    if (!prev) return res.status(404).json({ success: false, message: 'Task not found' });
     const body = { ...req.body };
 
     // Update assignedBy if task is reassigned to someone else
@@ -851,7 +918,17 @@ exports.createMeeting = async (req, res, next) => {
 
 exports.updateMeeting = async (req, res, next) => {
   try {
-    const meeting = await Meeting.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    // Whitelisted — req.body went through wholesale, so createdBy and any
+    // other schema path could be rewritten by an edit.
+    const MEETING_WRITABLE = ['title', 'description', 'type', 'date', 'time', 'duration',
+      'startTime', 'endTime', 'status', 'participants', 'clientId', 'location', 'notes',
+      'meetingLink', 'emergencyFlag'];
+    const patch = MEETING_WRITABLE.reduce((acc, k) => {
+      if (req.body[k] !== undefined) acc[k] = req.body[k];
+      return acc;
+    }, {});
+
+    const meeting = await Meeting.findByIdAndUpdate(req.params.id, patch, { new: true, runValidators: true })
       .populate(meetPopulate);
     if (!meeting) return res.status(404).json({ success: false, message: 'Meeting not found' });
     res.json({ success: true, data: meeting });

@@ -119,9 +119,13 @@ exports.updateSystemSettings = async (req, res, next) => {
     if (updateData.rateLimits) invalidateLimitsCache();
     if (updateData.featureAccess) invalidateFeatureAccessCache();
 
-    // Broadcast live update to all sockets for real-time config sync!
+    // Broadcast live config sync to internal staff only. This document holds
+    // the whole system configuration (feature-access rules, pipelines, rate
+    // limits, integration endpoints) — a bare io.emit() pushed all of it to
+    // every connected socket, client-portal logins included, which have no
+    // use for it (hasFeatureAccess short-circuits for the client role).
     const io = req.app.get('io');
-    io?.emit('settings:updated', updatedSettings);
+    io?.to('staff').emit('settings:updated', updatedSettings);
 
     res.json({ success: true, data: updatedSettings });
   } catch (err) { next(err); }

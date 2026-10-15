@@ -42,6 +42,22 @@ async function getFeatureAccessMap() {
 exports.invalidateFeatureAccessCache = () => { cache.at = 0; };
 
 /**
+ * Same decision as authorizeFeature, usable outside the Express middleware
+ * chain — e.g. the socket handler deciding which broadcast rooms a connection
+ * may join. Kept here so there is still exactly one place that answers
+ * "can this user use this feature".
+ */
+exports.userHasFeature = async (user, featureKey, defaultRoles) => {
+  if (!user) return false;
+  if (user.role === 'client') return false; // portal access is a separate model
+  const map = await getFeatureAccessMap();
+  const rule = map[featureKey];
+  const roles   = rule ? rule.roles   : defaultRoles;
+  const userIds = rule ? rule.userIds : [];
+  return roles.includes(user.role) || userIds.includes(String(user._id));
+};
+
+/**
  * Gates a route/router by an admin-configurable feature key.
  *
  * @param featureKey   Key into SystemSettings.featureAccess (e.g. 'campaigns').

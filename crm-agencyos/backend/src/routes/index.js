@@ -55,7 +55,10 @@ clientsRouter.get('/:id',          ctrl.getClient);
 clientsRouter.post('/',            denyMemberWrites, authorizeFeature('clients', ['admin','manager']), ctrl.createClient);
 clientsRouter.put('/:id',          denyMemberWrites, authorizeFeature('clients', ['admin','manager']), ctrl.updateClient);
 clientsRouter.delete('/:id',       denyMemberWrites, authorizeFeature('clients', ['admin','manager']), ctrl.deleteClient);
-clientsRouter.post('/:id/notes',              ctrl.addClientNote);
+// Notes are internal account commentary — a portal login must not be able to
+// write them (on its own record or, before the controller-level scoping, on
+// anyone else's either).
+clientsRouter.post('/:id/notes',              denyClientWrites, ctrl.addClientNote);
 clientsRouter.post('/:id/reset-portal-password', authorize('admin'), ctrl.resetPortalPassword);
 module.exports.clients = clientsRouter;
 
@@ -74,6 +77,11 @@ module.exports.tasks = tasksRouter;
 const todosRouter = express.Router();
 todosRouter.use(protect);
 todosRouter.use(authorizeFeature('todos', ['admin','manager','member','client_relations'], { clientBypass: true }));
+// clientBypass above lets portal logins READ todos (they appear in the portal
+// view), but this router was the one shared-with-portal router missing the
+// write block that tasks/meetings/projects all have — so a client could
+// create, edit or delete any todo in the company by id.
+todosRouter.use(denyClientWrites);
 todosRouter.get('/',    ctrl.getTodos);
 todosRouter.post('/',   upload.array('files', 10), ctrl.createTodo);
 todosRouter.put('/:id', upload.array('files', 10), ctrl.updateTodo);

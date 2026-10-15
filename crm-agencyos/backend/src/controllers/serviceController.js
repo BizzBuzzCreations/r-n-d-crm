@@ -39,9 +39,17 @@ exports.createService = async (req, res, next) => {
 
 exports.updateService = async (req, res, next) => {
   try {
+    // Whitelisted rather than passing req.body through, which let a caller
+    // overwrite createdBy/timestamps or any other schema path.
+    const SERVICE_WRITABLE = ['name', 'description', 'category', 'color', 'icon', 'isActive'];
+    const patch = SERVICE_WRITABLE.reduce((acc, k) => {
+      if (req.body[k] !== undefined) acc[k] = req.body[k];
+      return acc;
+    }, {});
+
     const service = await Service.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      patch,
       { new: true, runValidators: true }
     ).populate('createdBy', 'name');
     if (!service) return res.status(404).json({ success: false, message: 'Service not found' });

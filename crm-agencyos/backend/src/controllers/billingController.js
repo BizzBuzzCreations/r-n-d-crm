@@ -98,7 +98,24 @@ exports.updateInvoice = async (req, res, next) => {
     delete snap.versions;
     existing.versions.push({ snapshot: snap, savedAt: new Date(), savedBy: req.user._id });
 
-    const body = { ...req.body };
+    // Whitelist what an edit may touch. `Object.assign(existing, req.body)`
+    // below previously accepted the entire request body, so a caller could
+    // set paidAmount/balanceDue (marking an invoice paid without any Payment
+    // record), rewrite invoiceNumber, flip isDeleted, or overwrite the
+    // versions[] audit trail. Money fields are derived from line items here
+    // and from the Payment hooks in models/Invoice.js — never from input.
+    const INVOICE_WRITABLE = ['clientId', 'lineItems', 'taxRate', 'discount', 'currency',
+      'status', 'issueDate', 'dueDate', 'notes', 'terms', 'poNumber', 'title'];
+    const body = INVOICE_WRITABLE.reduce((acc, k) => {
+      if (req.body[k] !== undefined) acc[k] = req.body[k];
+      return acc;
+    }, {});
+
+    // A tax-rate or discount-only edit changed neither the totals nor the
+    // balance before, because recomputation was gated on lineItems alone.
+    if (body.taxRate !== undefined || body.discount !== undefined) {
+      body.lineItems = body.lineItems !== undefined ? body.lineItems : existing.lineItems;
+    }
 
     // Recompute totals if lineItems changed
     if (body.lineItems !== undefined) {

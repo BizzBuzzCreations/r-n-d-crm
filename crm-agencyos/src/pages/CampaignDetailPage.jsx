@@ -1338,6 +1338,13 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
       toast.error('Daily Limit must be at least 1 — leave it blank and the campaign will never send.');
       return;
     }
+    // Same trap, different field: this one is optional (blank = no limit),
+    // but an explicit 0 is the lower of the two caps and silently stops the
+    // campaign dead.
+    if (maxNewLeadsPerDay !== '' && !(Number(maxNewLeadsPerDay) > 0)) {
+      toast.error('Max new leads per day must be at least 1 — clear the field for no limit.');
+      return;
+    }
     if (followUpEnabled && !(Number(followUpDelayHours) > 0)) {
       toast.error('Follow-up delay must be at least 1 hour.');
       return;
@@ -1489,7 +1496,7 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
         </div>
         <Input
           label="Max new leads per day"
-          type="number" min="0"
+          type="number" min="1"
           placeholder="No limit"
           value={maxNewLeadsPerDay}
           onChange={(e) => setMaxNewLeadsPerDay(e.target.value)}

@@ -16,8 +16,18 @@ function isPrivateIp(ip) {
   return (
     ip === '::1' || ip === '127.0.0.1' || ip.startsWith('192.168.') ||
     ip.startsWith('10.') || ip.startsWith('172.16.') || ip.startsWith('172.17.') ||
-    ip.startsWith('172.18.') || ip.startsWith('172.19.') || ip.startsWith('172.2') ||
-    ip.startsWith('172.30.') || ip.startsWith('172.31.') || ip.startsWith('::ffff:127.')
+    ip.startsWith('172.18.') || ip.startsWith('172.19.') ||
+    // '172.2' used to be matched as a prefix, which wrongly classified every
+    // public 172.2x.x.x and 172.20x.x.x address as private (no geo lookup,
+    // so those visitors silently lost their country/city). The private
+    // range is only 172.16-172.31.
+    ip.startsWith('172.20.') || ip.startsWith('172.21.') || ip.startsWith('172.22.') ||
+    ip.startsWith('172.23.') || ip.startsWith('172.24.') || ip.startsWith('172.25.') ||
+    ip.startsWith('172.26.') || ip.startsWith('172.27.') || ip.startsWith('172.28.') ||
+    ip.startsWith('172.29.') ||
+    ip.startsWith('172.30.') || ip.startsWith('172.31.') || ip.startsWith('::ffff:127.') ||
+    // IPv6 link-local / unique-local, previously missed entirely
+    ip.toLowerCase().startsWith('fe80:') || ip.toLowerCase().startsWith('fc') || ip.toLowerCase().startsWith('fd')
   );
 }
 

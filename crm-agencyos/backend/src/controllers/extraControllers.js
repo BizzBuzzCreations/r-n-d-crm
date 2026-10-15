@@ -80,10 +80,66 @@ const getCanonicalThreadId = (threadId, reqUser) => {
   return threadId;
 };
 
+// Extra gate for portal logins on the shared message routes.
+//
+// getChannelAccess deliberately answers "allowed" for anything that isn't a
+// Channel ObjectId, because DMs and legacy string thread ids are decided by
+// their callers — so on its own it let a client read a legacy string-named
+// staff channel (e.g. 'general', which real messages still carry from before
+// channels became documents). DM ids are always rebuilt around the
+// requester's own id above, so a client can't read two other people's
+// conversation, but they could still open a DM with any employee in the
+// company rather than only the contacts the portal exposes to them.
+async function assertClientThreadAccess(req, canonicalId) {
+  if (req.user.role !== 'client') return null;
+
+  if (canonicalId.startsWith('dm-')) {
+    const otherId = canonicalId.slice(3).split('-').find((id) => id !== String(req.user._id));
+    const contacts = await getPortalContactIds(req.user);
+    if (!otherId || !contacts.has(String(otherId))) {
+      return 'You can only message your account contacts.';
+    }
+    return null;
+  }
+
+  if (!isValidObjectId(canonicalId)) {
+    return 'You do not have access to this conversation.';
+  }
+
+  const ch = await Channel.findById(canonicalId, 'clientId isPrivate members').lean();
+  const isMember = ch?.members?.some((m) => String(m) === String(req.user._id));
+  const isDedicated = ch?.clientId && String(ch.clientId) === String(req.user.clientId);
+  if (!ch || !(isDedicated || (ch.isPrivate && isMember))) {
+    return 'You do not have access to this channel.';
+  }
+  return null;
+}
+
+// Mirrors portalController.getContacts exactly (admins + the staff assigned to
+// this client's projects and tasks) so the people a client may message are
+// always the same set the portal shows them. Kept in sync deliberately — if
+// that list changes, this must change with it.
+async function getPortalContactIds(user) {
+  const clientId = user.clientId;
+  const [admins, projects, tasks] = await Promise.all([
+    User.find({ role: 'admin' }, '_id').lean(),
+    Project.find({ clientId }, 'assignedTeam').lean(),
+    Task.find({ clientId }, 'assignedTo').lean(),
+  ]);
+
+  const ids = new Set();
+  admins.forEach((a) => ids.add(String(a._id)));
+  projects.forEach((p) => (p.assignedTeam || []).forEach((m) => ids.add(String(m))));
+  tasks.forEach((t) => { if (t.assignedTo) ids.add(String(t.assignedTo)); });
+  return ids;
+}
+
 exports.getThreadMessages = async (req, res, next) => {
   try {
     const { threadId } = req.params;
     const canonicalId = getCanonicalThreadId(threadId, req.user);
+    const clientDenial = await assertClientThreadAccess(req, canonicalId);
+    if (clientDenial) return res.status(403).json({ success: false, message: clientDenial });
     const access = await getChannelAccess(req.user, canonicalId);
     if (!access.allowed) return res.status(403).json({ success: false, message: 'You do not have access to this conversation.' });
     const messages = await Message.find({ threadId: canonicalId })
@@ -101,17 +157,11 @@ exports.sendMessage = async (req, res, next) => {
     const canonicalId = getCanonicalThreadId(threadId, req.user);
     const { text } = req.body;
 
-    // Clients can only post in private channels where they are a member (enforced at socket + API layer)
-    if (req.user.role === 'client') {
-      if (!canonicalId.startsWith('dm-')) {
-        const ch = await Channel.findById(canonicalId, 'clientId isPrivate members').lean();
-        const isMember = ch?.members?.some((m) => String(m) === String(req.user._id));
-        const isDedicated = ch?.clientId && String(ch.clientId) === String(req.user.clientId);
-        if (!ch || !(isDedicated || (ch.isPrivate && isMember))) {
-          return res.status(403).json({ success: false, message: 'You do not have access to this channel.' });
-        }
-      }
-    }
+    // Clients can only post in their dedicated/member private channels, and
+    // only DM their actual account contacts (see assertClientThreadAccess —
+    // this used to skip the check entirely for any `dm-` thread).
+    const clientDenial = await assertClientThreadAccess(req, canonicalId);
+    if (clientDenial) return res.status(403).json({ success: false, message: clientDenial });
 
     if (req.user.role !== 'client') {
       const access = await getChannelAccess(req.user, canonicalId);
@@ -277,9 +327,14 @@ exports.getReport = async (req, res, next) => {
 // ═══════════════════════════════════════════════════
 exports.getWorkLog = async (req, res, next) => {
   try {
+    // Only admin/manager may look at anyone else's hours. This used to scope
+    // just 'member', which left client_relations, read_only AND client-portal
+    // logins able to read every staff member's work log — including a client
+    // seeing exactly how many hours the agency's team booked.
+    const canSeeOthers = req.user.role === 'admin' || req.user.role === 'manager';
     let filter = {};
-    if (req.user.role === 'member') filter.userId = req.user._id;
-    if (req.query.userId && req.user.role !== 'member') filter.userId = req.query.userId;
+    if (!canSeeOthers) filter.userId = req.user._id;
+    if (req.query.userId && canSeeOthers) filter.userId = req.query.userId;
     if (req.query.date) filter.date = req.query.date;
 
     const logs = await WorkLog.find(filter)
@@ -681,7 +736,15 @@ exports.createProject = async (req, res, next) => {
 
 exports.updateProject = async (req, res, next) => {
   try {
-    const project = await Project.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    // Whitelisted, same reasoning as updateMeeting/updateInvoice.
+    const PROJECT_WRITABLE = ['name', 'description', 'clientId', 'assignedTeam',
+      'status', 'startDate', 'endDate', 'budget'];
+    const patch = PROJECT_WRITABLE.reduce((acc, k) => {
+      if (req.body[k] !== undefined) acc[k] = req.body[k];
+      return acc;
+    }, {});
+
+    const project = await Project.findByIdAndUpdate(req.params.id, patch, { new: true, runValidators: true })
       .populate('clientId', 'name')
       .populate('assignedTeam', 'name email color initials status position');
     if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
