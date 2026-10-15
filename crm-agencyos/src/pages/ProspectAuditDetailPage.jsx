@@ -21,6 +21,9 @@ const CRAWL_STATUS_BADGE = {
 };
 
 const TIER_BADGE = {
+  // 'hot' = evidence of real marketing spend AND fixable problems — the
+  // strongest pitch in the list (see utils/prospectScoring.js).
+  hot:     { label: 'Hot Lead',      icon: Flame,          tw: 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300' },
   high:    { label: 'High Priority', icon: Flame,          tw: 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400' },
   medium:  { label: 'Medium',        icon: ShieldAlert,     tw: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400' },
   low:     { label: 'Low',           icon: ShieldQuestion,  tw: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
@@ -39,6 +42,9 @@ const FLAG_LABELS = {
   no_canonical:        { label: 'No canonical tag',                          good: false },
   technically_sound:   { label: 'Technically sound — few issues found',      good: true  },
   high_opportunity:    { label: 'High marketing opportunity',                good: true  },
+  // Neutral, not good/bad: the PageSpeed half of the audit didn't run, so
+  // performance and SEO problems were never measured for this prospect.
+  incomplete_audit:    { label: 'Incomplete audit — PageSpeed data missing', good: null  },
   no_site:             { label: 'No live website found',                    good: false },
 };
 
@@ -217,6 +223,15 @@ function ProspectDetailModal({ prospect, onClose }) {
 }
 
 // Client-side CSV export — same pattern as CampaignDetailPage's downloadLeadsCSV.
+// Values here can come from anonymous public forms and scraped listings, so a
+// cell starting with = + - @ (or a control char) would be executed as a
+// formula when the export is opened in Excel/Sheets. Prefixing with an
+// apostrophe forces it to be read as text.
+const csvCell = (c) => {
+  const s = String(c ?? '').replace(/"/g, '""');
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+};
+
 function downloadProspectsCSV(prospects, filename) {
   const headers = [
     'Business Name', 'Business Type', 'City', 'Phone', 'Email', 'Website', 'Rating', 'Reviews',
@@ -227,7 +242,7 @@ function downloadProspectsCSV(prospects, filename) {
     p.priorStatus, p.callNotes, p.crawlStatus, p.technicalScore ?? '', p.opportunityScore ?? '', p.tier || '', (p.flags || []).join('; '),
   ]);
   const csv = [headers, ...rows]
-    .map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
+    .map((r) => r.map((c) => `"${csvCell(c)}"`).join(','))
     .join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -402,6 +417,7 @@ export default function ProspectAuditDetailPage() {
           <div className="w-44">
             <Select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
               <option value="all">All tiers</option>
+              <option value="hot">Hot Lead</option>
               <option value="high">High Priority</option>
               <option value="medium">Medium</option>
               <option value="low">Low</option>

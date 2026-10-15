@@ -30,6 +30,10 @@ const ProspectAuditSchema = new mongoose.Schema({
   },
   crawledAt: { type: Date, default: null },
   crawlError: { type: String, default: '' },
+  // Real HTTP status of the homepage fetch. A non-2xx body is still parseable
+  // HTML, so this is what stops an error/bot-wall page being scored as the
+  // prospect's actual site (see runTier1 in workers/prospectAuditWorker.js).
+  httpStatus: { type: Number, default: null },
 
   // ── Tier 1 — structural findings (plain HTTP fetch + cheerio) ─────────
   hasSSL:           { type: Boolean, default: false },
@@ -75,11 +79,19 @@ const ProspectAuditSchema = new mongoose.Schema({
     inp: { type: Number, default: null },
   },
   psiFailedAudits: { type: [String], default: [] },
+  tti: { type: Number, default: null }, // Time to Interactive — kept under its own name (was wrongly stored as coreWebVitals.inp)
+  // Whether the PageSpeed half of the audit actually ran. Without this, a
+  // failed PSI call is indistinguishable from a site that scored perfectly:
+  // every PSI branch in prospectScoring tests `!= null`, so missing data read
+  // as "no problems found" and mis-tiered real prospects as 'skip'.
+  psiStatus: { type: String, enum: ['pending', 'ok', 'failed', 'skipped'], default: 'pending' },
+  psiError:  { type: String, default: '' },
+  needsRecrawl: { type: Boolean, default: false },
 
   // ── Output ──────────────────────────────────────────────────────────
   technicalScore:   { type: Number, default: null },
   opportunityScore: { type: Number, default: null },
-  tier:             { type: String, enum: ['high', 'medium', 'low', 'skip', 'no_site', null], default: null },
+  tier:             { type: String, enum: ['hot', 'high', 'medium', 'low', 'skip', 'no_site', null], default: null },
   flags:            { type: [String], default: [] },
 }, { timestamps: true });
 

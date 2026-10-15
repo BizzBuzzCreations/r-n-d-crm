@@ -64,6 +64,17 @@ let sysLog = { info: () => {}, warn: () => {}, error: () => {} };
 try { sysLog = require('../utils/sysLogger').logger; } catch {}
 
 const FETCH_TIMEOUT_MS = 10000;
+// PageSpeed Insights runs a full Lighthouse pass on Google's side before it
+// responds — routinely 10-30s, sometimes more on a slow target site. Sharing
+// the 10s page-fetch timeout above meant essentially every PSI call aborted
+// (`This operation was aborted` in prospect-audit.log) and the audit silently
+// fell back to Tier 1 only. It needs its own, much longer budget.
+const PSI_TIMEOUT_MS = 60000;
+const PSI_ATTEMPTS = 2;
+// Hard cap on how much HTML we'll pull into memory per page. Prospect URLs
+// come from imported lists, so the size of what's on the other end is not
+// something this worker controls.
+const MAX_HTML_BYTES = 3 * 1024 * 1024;
 const CMS_SIGNATURES = [
   { pattern: /wp-content|wp-includes/i, name: 'WordPress' },
   { pattern: /cdn\.shopify\.com|shopify/i, name: 'Shopify' },
@@ -74,14 +85,31 @@ const CMS_SIGNATURES = [
 const ANALYTICS_SIGNATURES = /googletagmanager\.com|google-analytics\.com|gtag\(|analytics\.js/i;
 const ADS_PIXEL_SIGNATURES = /googleadservices\.com|google_conversion|connect\.facebook\.net|fbevents\.js|fbq\(/i;
 
-async function fetchWithTimeout(url, opts = {}) {
+async function fetchWithTimeout(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...opts, signal: controller.signal, redirect: 'follow' });
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// Read a response body with a hard size ceiling, so one oversized page can't
+// exhaust this worker's memory (concurrency 5 means 5 of these at once).
+async function readCappedText(res) {
+  const reader = res.body?.getReader?.();
+  if (!reader) return (await res.text()).slice(0, MAX_HTML_BYTES);
+  const chunks = [];
+  let total = 0;
+  while (total < MAX_HTML_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    chunks.push(value);
+  }
+  try { await reader.cancel(); } catch { /* already closed */ }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, MAX_HTML_BYTES).toString('utf8');
 }
 
 async function checkPathExists(baseUrl, path) {
@@ -113,7 +141,20 @@ async function countBrokenLinks(baseUrl, links) {
 async function runTier1(website) {
   const res = await fetchWithTimeout(website, { method: 'GET' });
   const finalUrl = res.url || website;
-  const html = await res.text();
+
+  // A 403/404/500 body is still perfectly parseable HTML, so without this
+  // check an error page (or a bot wall) got scored as if it were the real
+  // site — producing confident findings like "no title tag" or "no SSL" that
+  // describe Cloudflare's block page, not the prospect's homepage. Those
+  // findings are destined for a cold email, so a wrong one is worse than
+  // none: fail the crawl instead, and let the status say why.
+  if (!res.ok) {
+    const e = new Error(`HTTP ${res.status}`);
+    e.httpStatus = res.status;
+    throw e;
+  }
+
+  const html = await readCappedText(res);
   const $ = cheerio.load(html);
 
   const hasSSL = finalUrl.startsWith('https://');
@@ -208,6 +249,7 @@ async function runTier1(website) {
   }
 
   return {
+    httpStatus: res.status,
     hasSSL, hasViewportTag, title, metaDescription, h1Present,
     hasAnalytics, hasAdsPixel, cmsPlatform, hasBlog, hasContactForm,
     hasSitemap, hasRobotsTxt, brokenLinksCount,
@@ -221,11 +263,27 @@ async function runTier1(website) {
 
 async function runTier2(website, apiKey) {
   const url = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(website)}&key=${encodeURIComponent(apiKey)}&category=performance&category=seo&category=accessibility&category=best-practices&strategy=mobile`;
-  const res = await fetchWithTimeout(url, { method: 'GET' });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`PSI HTTP ${res.status}: ${body.slice(0, 200)}`);
+
+  // PSI is independently flaky (transient 429/500s, Lighthouse timing out on
+  // the target site) and a single failure used to mean no performance data at
+  // all for that prospect, which in turn silently skewed scoring. One cheap
+  // retry recovers most of those.
+  let res, lastErr;
+  for (let attempt = 1; attempt <= PSI_ATTEMPTS; attempt++) {
+    try {
+      res = await fetchWithTimeout(url, { method: 'GET' }, PSI_TIMEOUT_MS);
+      if (res.ok) break;
+      const body = await res.text().catch(() => '');
+      lastErr = new Error(`PSI HTTP ${res.status}: ${body.slice(0, 200)}`);
+      res = null;
+    } catch (e) {
+      lastErr = e.name === 'AbortError' ? new Error(`PSI timed out after ${PSI_TIMEOUT_MS}ms`) : e;
+      res = null;
+    }
+    if (attempt < PSI_ATTEMPTS) await new Promise((r) => setTimeout(r, 3000));
   }
+  if (!res) throw lastErr || new Error('PSI failed');
+
   const data = await res.json();
   const categories = data?.lighthouseResult?.categories || {};
   const audits = data?.lighthouseResult?.audits || {};
@@ -244,9 +302,18 @@ async function runTier2(website, apiKey) {
     coreWebVitals: {
       lcp: audits['largest-contentful-paint']?.numericValue ?? null,
       cls: audits['cumulative-layout-shift']?.numericValue ?? null,
-      inp: audits['interactive']?.numericValue ?? null,
+      // `interactive` is Time to Interactive, a different (and deprecated)
+      // metric — storing it as INP mislabelled the number and would have put
+      // a wrong figure in front of a prospect. Lighthouse only reports INP
+      // for real-user (field) data, so in a lab run this is usually absent:
+      // leave it null rather than substituting an unrelated metric, and keep
+      // TTI under its own name.
+      inp: audits['experimental-interaction-to-next-paint']?.numericValue ?? null,
     },
+    tti: audits['interactive']?.numericValue ?? null,
     psiFailedAudits: failedAudits,
+    psiStatus: 'ok',
+    psiError: '',
   };
 }
 
@@ -275,11 +342,26 @@ const worker = new Worker('prospect-audit-queue', async (job) => {
     let tier2 = {};
     try {
       const apiKey = await getPsiKey(psiKeyLabel);
-      if (apiKey) tier2 = await runTier2(prospect.website, apiKey);
+      if (apiKey) {
+        tier2 = await runTier2(prospect.website, apiKey);
+      } else {
+        tier2 = { psiStatus: 'skipped', psiError: 'No PageSpeed Insights API key configured' };
+      }
     } catch (psiErr) {
       // PSI failing (rate-limited, site refuses Lighthouse, transient) isn't
       // fatal to the whole audit — Tier 1 findings alone still produce a
       // usable (if less complete) score. Logged, not thrown.
+      //
+      // But it must be RECORDED, not just logged: every PSI-dependent branch
+      // in prospectScoring reads `psiPerformanceScore != null`, so a failed
+      // run used to be indistinguishable from a site with perfect scores —
+      // silently dragging technicalScore down and tiering real prospects as
+      // 'skip'. needsRecrawl marks them for another pass.
+      tier2 = {
+        psiStatus: 'failed',
+        psiError: String(psiErr.message || 'Unknown PSI error').slice(0, 300),
+        needsRecrawl: true,
+      };
       err(`PSI failed for ${prospect.website}: ${psiErr.message}`);
       sysLog.error('PROSPECT_AUDIT', `PSI failed for ${prospect.website}: ${psiErr.message}`);
     }
@@ -295,10 +377,17 @@ const worker = new Worker('prospect-audit-queue', async (job) => {
     return { tier: scores.tier };
   } catch (crawlErr) {
     const isTimeout = crawlErr.name === 'AbortError';
-    const isBlocked = /403|Forbidden|blocked/i.test(crawlErr.message || '');
+    // 401/403/429 and Cloudflare-style walls are a *reachable* site refusing
+    // us, which is a different outreach decision than a dead domain — now
+    // driven by the real status code that runTier1 attaches, with the old
+    // message-regex kept as a fallback for errors thrown without one.
+    const code = crawlErr.httpStatus;
+    const isBlocked = code === 401 || code === 403 || code === 429
+      || /403|Forbidden|blocked/i.test(crawlErr.message || '');
     const status = isTimeout ? 'timeout' : isBlocked ? 'blocked' : 'dead';
 
     prospect.crawlStatus = status;
+    if (code) prospect.httpStatus = code;
     prospect.crawledAt = new Date();
     prospect.crawlError = String(crawlErr.message || 'Unknown error').slice(0, 500);
     const scores = calculateProspectScores(prospect); // crawlStatus !== 'ok' → 'no_site' bucket
