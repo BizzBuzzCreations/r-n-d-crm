@@ -26,6 +26,14 @@ const CampaignSettingsSchema = new mongoose.Schema({
   // sending domain first, Gmail-only) — plain tracked links, work in every
   // client immediately. Capped at 5 in the UI.
   responseOptions: { type: [String], default: [] },
+
+  // Which columns the Leads table shows for THIS campaign (Settings tab).
+  // Empty/absent means "never configured" and renders the default set, so
+  // every existing campaign looks exactly as it did before this was added.
+  // Stored per campaign rather than per user because the useful set depends
+  // on the campaign: an audit-driven one wants the Audit column, a plain
+  // mail-merge does not.
+  leadColumns: { type: [String], default: [] },
   textOnly:           { type: Boolean, default: false },
   firstEmailTextOnly: { type: Boolean, default: false },
   dailyLimit:         { type: Number, default: 30 },
