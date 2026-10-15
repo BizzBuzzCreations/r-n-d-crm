@@ -147,9 +147,12 @@ class LogWatcher {
         const last = this.positions[key] ?? 0;
 
         if (size < last) {
-          // File was rotated/truncated
+          // File was rotated/truncated. `continue`, not `return` — returning
+          // abandoned the whole tick, so every log source after the rotated
+          // one was skipped until the next interval (and if two rotated in
+          // sequence, sources further down the list could starve).
           this.positions[key] = 0;
-          return;
+          continue;
         }
 
         if (size > last) {

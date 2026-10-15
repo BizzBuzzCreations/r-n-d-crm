@@ -100,6 +100,11 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // ── Static files (uploaded attachments) ────────────────────
+// Leave attachments are excluded from the open static mount: they are
+// medical certificates and similar personal documents, and this directory is
+// otherwise served with no authentication at all. They're reachable only via
+// the authenticated, ownership-checked /api/media branch below.
+app.use('/uploads/leaves', (_req, res) => res.status(404).end());
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Profile pictures + leave attachments are also served from /api/media?d=<dir>&f=<file>.
@@ -112,12 +117,37 @@ const MEDIA_DIRS = {
   leaves:  path.join(__dirname, '../uploads/leaves'),
   files:   path.join(__dirname, '../uploads'), // campaign email images (flat uploads dir)
 };
-app.get('/api/media', (req, res) => {
+// Leave attachments require a real session AND ownership (or admin/manager).
+// Avatars and campaign images stay public — they're already embedded in
+// <img> tags and emails, and carry nothing personal.
+const mediaGuard = (req, res, next) => {
+  if (String(req.query.d || '') !== 'leaves') return next();
+  const { protect } = require('./middleware/auth');
+  return protect(req, res, async () => {
+    try {
+      if (['admin', 'manager'].includes(req.user.role)) return next();
+      const Leave = require('./models/Leave');
+      const file = path.basename(String(req.query.f || ''));
+      const owned = await Leave.exists({
+        employee: req.user._id,
+        'attachment.url': { $regex: `${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$` },
+      });
+      if (!owned) return res.status(403).json({ success: false, message: 'Not authorized for this file' });
+      return next();
+    } catch { return res.status(403).end(); }
+  });
+};
+
+app.get('/api/media', mediaGuard, (req, res) => {
   const dir  = MEDIA_DIRS[String(req.query.d || '')];
   const file = path.basename(String(req.query.f || ''));
   if (!dir || !file || file.startsWith('.')) return res.status(404).end();
   // Filenames are unique per upload (timestamp), so they can be cached forever.
-  res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  // Leave attachments are access-controlled above, so they must not be stored
+  // in any shared/proxy cache that would serve them without the auth check.
+  res.set('Cache-Control', String(req.query.d) === 'leaves'
+    ? 'private, max-age=600'
+    : 'public, max-age=31536000, immutable');
   res.sendFile(path.join(dir, file), (err) => { if (err && !res.headersSent) res.status(404).end(); });
 });
 

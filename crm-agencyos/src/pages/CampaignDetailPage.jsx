@@ -32,7 +32,9 @@ const SERIES_COLOR = {
 
 // A lead that opens a campaign email this many times or more is a strong
 // repeat-engagement signal — flagged as "Hot" directly in the leads table.
-const HOT_OPEN_THRESHOLD = 3;
+// Mirrors backend utils/campaignConstants.js (can't share a module across
+// the FE/BE boundary here). Counts QUALIFIED opens — see humanOpenCount.
+const HOT_OPEN_THRESHOLD = 2;
 
 const LEAD_STATUS_BADGE = {
   pending:      { label: 'Pending',      tw: 'badge-neutral' },
@@ -774,7 +776,10 @@ function LeadsTab({
   const sentLeads = leads.filter((l) => l.status === 'sent');
   const pendingLeads = leads.filter((l) => l.status === 'pending');
   const sentOrPendingLeads = leads.filter((l) => l.status === 'sent' || l.status === 'pending');
-  const hotLeads = leads.filter((l) => (l.openCount || 0) >= HOT_OPEN_THRESHOLD);
+  // Same OR as the backend: qualified opens, or the legacy raw-open rule for
+  // leads that predate humanOpenCount.
+  const isHotLead = (l) => (l.humanOpenCount || 0) >= HOT_OPEN_THRESHOLD || (l.openCount || 0) >= 3;
+  const hotLeads = leads.filter(isHotLead);
   const callRequestedLeads = leads.filter((l) => l.callRequested);
 
   const exportSlug = (campaign.name || 'campaign').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -1082,11 +1087,11 @@ function LeadsTab({
                         </td>
                         <td className="px-4 py-2.5 text-center text-slate-600 dark:text-slate-400">
                           <span
-                            title={formatOpenHistory(l) + ((l.openCount || 0) >= HOT_OPEN_THRESHOLD ? '\n🔥 Hot lead — opened 3+ times' : '')}
+                            title={formatOpenHistory(l) + (isHotLead(l) ? `\n🔥 Hot lead — ${HOT_OPEN_THRESHOLD}+ real opens` : '')}
                             className={cn('inline-flex items-center gap-1', l.openCount ? 'underline decoration-dotted cursor-help' : '')}
                           >
                             {l.openCount || 0}
-                            {(l.openCount || 0) >= HOT_OPEN_THRESHOLD && <Flame size={12} className="text-orange-500" />}
+                            {isHotLead(l) && <Flame size={12} className="text-orange-500" />}
                           </span>
                         </td>
                         <td className="px-4 py-2.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">
@@ -1338,6 +1343,13 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
       toast.error('Daily Limit must be at least 1 — leave it blank and the campaign will never send.');
       return;
     }
+    // Same trap, different field: this one is optional (blank = no limit),
+    // but an explicit 0 is the lower of the two caps and silently stops the
+    // campaign dead.
+    if (maxNewLeadsPerDay !== '' && !(Number(maxNewLeadsPerDay) > 0)) {
+      toast.error('Max new leads per day must be at least 1 — clear the field for no limit.');
+      return;
+    }
     if (followUpEnabled && !(Number(followUpDelayHours) > 0)) {
       toast.error('Follow-up delay must be at least 1 hour.');
       return;
@@ -1489,7 +1501,7 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
         </div>
         <Input
           label="Max new leads per day"
-          type="number" min="0"
+          type="number" min="1"
           placeholder="No limit"
           value={maxNewLeadsPerDay}
           onChange={(e) => setMaxNewLeadsPerDay(e.target.value)}
@@ -1501,7 +1513,7 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
           checked={followUpEnabled}
           onChange={setFollowUpEnabled}
           label="Auto follow-up to hot leads"
-          description={`Automatically sends this one-time follow-up to a lead once it goes "hot" (opened ${HOT_OPEN_THRESHOLD}+ times, or clicked Request a Call) — sent once per lead, never repeated`}
+          description={`Automatically sends this one-time follow-up once a lead goes "hot" — ${HOT_OPEN_THRESHOLD}+ real opens (automated scanner/prefetch hits don't count) or a Request a Call click — sent once per lead, never repeated`}
         />
         {followUpEnabled && (
           <div className="space-y-3 pt-1">

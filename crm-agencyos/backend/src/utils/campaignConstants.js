@@ -1,11 +1,26 @@
 'use strict';
 
-// A lead that opens a campaign email this many times or more is a strong
-// repeat-engagement signal — used to flag a lead "hot" for the B2B pipeline
-// sync and for the auto-follow-up dispatcher. Keep in sync with the
-// display-only copy of this same value in CampaignDetailPage.jsx (frontend
-// badge) — that one can't easily share this module across the FE/BE boundary.
-exports.HOT_OPEN_THRESHOLD = 3;
+// A lead with this many QUALIFIED opens (humanOpenCount — opens that didn't
+// look like a scanner/prefetch, see trackingController.trackOpen) is treated
+// as "hot": it drives the B2B pipeline sync and triggers the auto-follow-up.
+//
+// Lowered 3 → 2 deliberately: two real opens is already a clear
+// repeat-engagement signal, and waiting for a third meant most interested
+// recipients never qualified at all — especially since any image-blocking
+// client under-counts opens to begin with.
+//
+// This counts QUALIFIED opens, not raw ones, precisely because the threshold
+// is now low: a security gateway plus an image proxy can easily produce two
+// raw opens for a recipient who never looked at the email, and following up
+// on that wastes a send and the mailbox's reputation budget.
+exports.HOT_OPEN_THRESHOLD = 2;
+
+// Back-compat for leads that predate humanOpenCount: their qualified count is
+// stuck at 0, so they'd silently stop qualifying. The old raw-open rule keeps
+// working for them, at its original (stricter) value. Both paths are OR'd
+// together wherever "hot" is decided, so this is purely additive — no
+// in-flight campaign loses follow-ups when this ships.
+exports.LEGACY_RAW_OPEN_THRESHOLD = 3;
 
 // Known automated fetchers that hit the open-tracking pixel while scanning
 // or pre-rendering an inbound email — before a human ever opens it. Used

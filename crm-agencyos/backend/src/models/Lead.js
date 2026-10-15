@@ -144,7 +144,17 @@ const LeadSchema = new mongoose.Schema({
   externalAssignedToName: { type: String, default: '' },
 }, { timestamps: true });
 
-LeadSchema.statics.getNextLeadNumber = async function () {
+/**
+ * Reserve `count` consecutive lead numbers and return the FIRST one.
+ *
+ * A bulk import used to call this once (bumping the counter by 1) and then
+ * hand out `LD-${n + index}` for every row — so a 500-row import consumed
+ * 500 numbers while the counter only knew about one. The next 499 single
+ * creates then collided with numbers the import had already used and failed
+ * on the unique `leadId` index. Reserving the whole block atomically keeps
+ * the counter and reality in step.
+ */
+LeadSchema.statics.getNextLeadNumber = async function (count = 1) {
   // Atomic $inc on the shared Counter model (already used the same way by
   // Task.taskNumber and Invoice.invoiceNumber — see models/index.js).
   // Replaces the previous "scan all leads, compute max, use max+1"
@@ -153,12 +163,14 @@ LeadSchema.statics.getNextLeadNumber = async function () {
   // could hand out the same "next" number to two requests, failing the
   // second one's save with a duplicate-key error on leadId.
   const Counter = mongoose.model('Counter');
+  const n = Math.max(1, Number(count) || 1);
   const counter = await Counter.findOneAndUpdate(
     { id: 'leadId' },
-    { $inc: { seq: 1 } },
+    { $inc: { seq: n } },
     { new: true, upsert: true }
   );
-  return counter.seq;
+  // counter.seq is now the LAST number of the reserved block; return the first.
+  return counter.seq - n + 1;
 };
 
 // Pre-save to auto-initialize SLA Response Deadline and generate sequential Lead ID

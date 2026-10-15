@@ -84,7 +84,14 @@ async function syncAccount(account, io) {
 
       const range = `${account.imapLastUid + 1}:*`;
       const fromAddresses = new Map(); // lowercase email -> true, deduped
-      for await (const msg of client.fetch(range, { envelope: true, uid: true })) {
+      // `{ uid: true }` MUST be the third argument (fetch options), not part
+      // of the query: inside the query it only asks for the UID to be
+      // returned, while the *range* keeps being read as message sequence
+      // numbers. Since UIDs climb forever and sequence numbers only go up to
+      // the current message count, `${lastUid + 1}:*` then resolves to the
+      // newest message alone (or the wrong ones entirely) — so every reply
+      // after the first in a polling window was silently missed.
+      for await (const msg of client.fetch(range, { envelope: true }, { uid: true })) {
         const from = msg.envelope?.from?.[0]?.address;
         if (from) fromAddresses.set(from.toLowerCase(), true);
       }

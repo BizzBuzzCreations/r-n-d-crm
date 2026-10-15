@@ -15,7 +15,7 @@ const EmailAccount = require('../models/EmailAccount');
 const { addFollowUpEmailToQueue } = require('../queues/campaignQueue');
 const { effectiveDailyLimit } = require('../utils/warmup');
 const { isWithinSendingWindow } = require('../utils/sendingWindow');
-const { HOT_OPEN_THRESHOLD } = require('../utils/campaignConstants');
+const { HOT_OPEN_THRESHOLD, LEGACY_RAW_OPEN_THRESHOLD } = require('../utils/campaignConstants');
 
 function startFollowUpDispatcher() {
   cron.schedule('*/5 * * * *', runFollowUpTick);
@@ -52,6 +52,14 @@ async function runFollowUpTick() {
 
 async function dispatchOneFollowUp(campaign) {
   const settings = campaign.settings || {};
+
+  // Never queue a follow-up with nothing in it. followUpEnabled can be true
+  // while the subject/body are still empty (the UI validates them on save,
+  // but the flag and the content are separate fields and older campaigns may
+  // predate that validation) — the worker would happily send a blank email.
+  if (!String(settings.followUpSubject || '').trim() || !String(settings.followUpBodyHtml || '').trim()) {
+    return;
+  }
 
   // Same sending-hours window as the primary send — no separate
   // follow-up-specific hours setting.
@@ -95,7 +103,11 @@ async function dispatchOneFollowUp(campaign) {
     status: 'sent',
     followUpStatus: 'none',
     $or: [
-      { openCount: { $gte: HOT_OPEN_THRESHOLD }, openedAt: { $lte: cutoff } },
+      // Qualified (non-scanner) opens — the primary rule, threshold 2.
+      { humanOpenCount: { $gte: HOT_OPEN_THRESHOLD }, openedAt: { $lte: cutoff } },
+      // Leads that predate humanOpenCount keep the original raw-open rule so
+      // in-flight campaigns don't lose their follow-ups. See campaignConstants.
+      { openCount: { $gte: LEGACY_RAW_OPEN_THRESHOLD }, openedAt: { $lte: cutoff } },
       { callRequested: true, callRequestedAt: { $lte: cutoff } },
     ],
   }).sort({ openedAt: 1 });

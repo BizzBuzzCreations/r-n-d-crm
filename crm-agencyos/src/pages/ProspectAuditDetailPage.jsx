@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   ArrowLeft, Upload, FileSpreadsheet, Play, Pause, Download, XCircle, Flame,
   ShieldCheck, ShieldAlert, ShieldQuestion, ShieldOff, Check, X, Eye, Lock, Smartphone,
-  Gauge, FileText, Heading, BarChart3, Megaphone, Map, Rss, Mail as MailIcon, Star, Link2, Globe2,
+  Gauge, FileText, Heading, BarChart3, Megaphone, Map, Rss, Mail as MailIcon, Star, Link2, Globe2, Send, Repeat,
 } from 'lucide-react';
 import useAppStore from '../store/useAppStore';
 import { Page, Button, Select, StatCard, EmptyState, Modal } from '../components/ui';
@@ -21,6 +21,9 @@ const CRAWL_STATUS_BADGE = {
 };
 
 const TIER_BADGE = {
+  // 'hot' = evidence of real marketing spend AND fixable problems — the
+  // strongest pitch in the list (see utils/prospectScoring.js).
+  hot:     { label: 'Hot Lead',      icon: Flame,          tw: 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300' },
   high:    { label: 'High Priority', icon: Flame,          tw: 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400' },
   medium:  { label: 'Medium',        icon: ShieldAlert,     tw: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400' },
   low:     { label: 'Low',           icon: ShieldQuestion,  tw: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
@@ -39,6 +42,9 @@ const FLAG_LABELS = {
   no_canonical:        { label: 'No canonical tag',                          good: false },
   technically_sound:   { label: 'Technically sound — few issues found',      good: true  },
   high_opportunity:    { label: 'High marketing opportunity',                good: true  },
+  // Neutral, not good/bad: the PageSpeed half of the audit didn't run, so
+  // performance and SEO problems were never measured for this prospect.
+  incomplete_audit:    { label: 'Incomplete audit — PageSpeed data missing', good: null  },
   no_site:             { label: 'No live website found',                    good: false },
 };
 
@@ -217,6 +223,15 @@ function ProspectDetailModal({ prospect, onClose }) {
 }
 
 // Client-side CSV export — same pattern as CampaignDetailPage's downloadLeadsCSV.
+// Values here can come from anonymous public forms and scraped listings, so a
+// cell starting with = + - @ (or a control char) would be executed as a
+// formula when the export is opened in Excel/Sheets. Prefixing with an
+// apostrophe forces it to be read as text.
+const csvCell = (c) => {
+  const s = String(c ?? '').replace(/"/g, '""');
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+};
+
 function downloadProspectsCSV(prospects, filename) {
   const headers = [
     'Business Name', 'Business Type', 'City', 'Phone', 'Email', 'Website', 'Rating', 'Reviews',
@@ -227,7 +242,7 @@ function downloadProspectsCSV(prospects, filename) {
     p.priorStatus, p.callNotes, p.crawlStatus, p.technicalScore ?? '', p.opportunityScore ?? '', p.tier || '', (p.flags || []).join('; '),
   ]);
   const csv = [headers, ...rows]
-    .map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
+    .map((r) => r.map((c) => `"${csvCell(c)}"`).join(','))
     .join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -241,6 +256,7 @@ export default function ProspectAuditDetailPage() {
   const navigate = useNavigate();
   const {
     batches, prospects, loadBatch, loadProspects, importCsv, importSheet, startCrawl, pauseCrawl, deleteProspect,
+    campaigns, loadCampaigns, pushToCampaign, setAutoPush,
   } = useAppStore(useShallow((s) => ({
     batches: s.prospectAuditBatches,
     prospects: s.prospectAudits,
@@ -251,6 +267,10 @@ export default function ProspectAuditDetailPage() {
     startCrawl: s.startProspectAuditCrawl,
     pauseCrawl: s.pauseProspectAuditCrawl,
     deleteProspect: s.deleteProspectAudit,
+    campaigns: s.campaigns,
+    loadCampaigns: s.loadCampaigns,
+    pushToCampaign: s.pushProspectsToCampaign,
+    setAutoPush: s.setProspectAutoPush,
   })));
 
   const batch = batches.find((b) => b._id === id);
@@ -259,6 +279,16 @@ export default function ProspectAuditDetailPage() {
   const [sheetUrl, setSheetUrl] = useState('');
   const [importingSheet, setImportingSheet] = useState(false);
   const [tierFilter, setTierFilter] = useState('all');
+  const [showPush, setShowPush] = useState(false);
+  const [pushCampaignId, setPushCampaignId] = useState('');
+  const [pushTiers, setPushTiers] = useState(['hot', 'high']);
+  const [pushing, setPushing] = useState(false);
+  const [showAuto, setShowAuto] = useState(false);
+  const [autoCampaignId, setAutoCampaignId] = useState('');
+  const [autoTiers, setAutoTiers] = useState(['hot', 'high']);
+  const [autoRequireFindings, setAutoRequireFindings] = useState(true);
+  const [savingAuto, setSavingAuto] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   // Store just the id, not the object — re-derived from the live `prospects`
   // list on every render, so the modal reflects a re-crawl or refresh
   // instead of showing a frozen snapshot from the moment it was opened.
@@ -308,6 +338,15 @@ export default function ProspectAuditDetailPage() {
     return s;
   }, [prospects]);
 
+  // Mirrors the backend's own filter in pushToCampaign: crawled OK, has an
+  // email, and has at least one finding to personalise with.
+  const isPushable = (p) => p.crawlStatus === 'ok' && !!p.email && (p.findings || []).length > 0;
+  const pushableCount = useMemo(() => prospects.filter(isPushable).length, [prospects]);
+  const pushSelectedCount = useMemo(
+    () => prospects.filter((p) => isPushable(p) && (!pushTiers.length || pushTiers.includes(p.tier))).length,
+    [prospects, pushTiers],
+  );
+
   const filtered = tierFilter === 'all' ? prospects : prospects.filter((p) => p.tier === tierFilter);
 
   const exportSlug = (batch?.name || 'prospects').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -339,6 +378,28 @@ export default function ProspectAuditDetailPage() {
           {batch.status === 'crawling' && (
             <Button variant="outline" onClick={handleToggleStatus}><Pause size={14} /> Pause</Button>
           )}
+          <Button
+            disabled={!pushableCount}
+            onClick={() => { loadCampaigns(); setShowPush(true); }}
+            title={pushableCount
+              ? `${pushableCount} audited prospect(s) with an email address and at least one finding`
+              : 'No audited prospects with an email address and findings yet'}
+          >
+            <Send size={14} /> Push to Campaign
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              loadCampaigns();
+              setAutoCampaignId(batch.autoPushCampaign ? String(batch.autoPushCampaign) : '');
+              setAutoTiers(batch.autoPushTiers?.length ? batch.autoPushTiers : ['hot', 'high']);
+              setAutoRequireFindings(batch.autoPushRequireFindings !== false);
+              setShowAuto(true);
+            }}
+            title="Optionally push this batch into a campaign automatically when the crawl finishes"
+          >
+            <Repeat size={14} /> Auto-push: {batch.autoPushEnabled ? 'On' : 'Off'}
+          </Button>
           <Button
             variant="outline"
             disabled={!prospects.length}
@@ -402,6 +463,7 @@ export default function ProspectAuditDetailPage() {
           <div className="w-44">
             <Select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
               <option value="all">All tiers</option>
+              <option value="hot">Hot Lead</option>
               <option value="high">High Priority</option>
               <option value="medium">Medium</option>
               <option value="low">Low</option>
@@ -478,6 +540,191 @@ export default function ProspectAuditDetailPage() {
       </div>
 
       <ProspectDetailModal prospect={detailProspect} onClose={() => setDetailProspectId(null)} />
+
+      <Modal open={showPush} onClose={() => setShowPush(false)} title="Push prospects to an email campaign">
+        <div className="px-6 py-5 space-y-4">
+          <p className="text-[13px] text-slate-500 dark:text-slate-400">
+            Adds these prospects to a campaign as leads, each carrying its website-audit findings.
+            The campaign's email can then quote them with merge tags like{' '}
+            <code className="text-[12px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{'{{top_finding}}'}</code>{' '}
+            and <code className="text-[12px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{'{{perf_score}}'}</code>.
+          </p>
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Campaign</label>
+            <Select value={pushCampaignId} onChange={(e) => setPushCampaignId(e.target.value)}>
+              <option value="">Select a campaign…</option>
+              {campaigns
+                // Only draft/paused: pushing into a live campaign would start
+                // mailing the new leads within the minute (backend enforces this too).
+                .filter((c) => ['draft', 'paused'].includes(c.status))
+                .map((c) => <option key={c._id} value={c._id}>{c.name} ({c.status})</option>)}
+            </Select>
+            {!campaigns.some((c) => ['draft', 'paused'].includes(c.status)) && (
+              <p className="text-[12px] text-amber-600 dark:text-amber-400 mt-1.5">
+                No draft or paused campaign available — create one, or pause a running campaign first.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Tiers to include</label>
+            <div className="flex flex-wrap gap-2">
+              {['hot', 'high', 'medium', 'low'].map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setPushTiers((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t])}
+                  className={cn(
+                    'px-2.5 py-1 rounded-full text-[12px] font-semibold border transition-colors',
+                    pushTiers.includes(t)
+                      ? 'bg-primary-600 text-white border-primary-600'
+                      : 'border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300',
+                  )}
+                >
+                  {TIER_BADGE[t]?.label || t} ({stats[t] || 0})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="text-[13px] text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/50 rounded-lg px-3 py-2">
+            <strong>{pushSelectedCount}</strong> prospect{pushSelectedCount === 1 ? '' : 's'} will be added.
+            Prospects with no email address, no audit findings, or already in the campaign are skipped.
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <Button variant="outline" onClick={() => setShowPush(false)}>Cancel</Button>
+            <Button
+              disabled={!pushCampaignId || !pushSelectedCount || pushing}
+              onClick={async () => {
+                setPushing(true);
+                try {
+                  await pushToCampaign(id, { campaignId: pushCampaignId, tiers: pushTiers });
+                  setShowPush(false);
+                } catch { /* store already surfaced the error */ } finally {
+                  setPushing(false);
+                }
+              }}
+            >
+              <Send size={14} /> {pushing ? 'Adding…' : `Add ${pushSelectedCount} lead${pushSelectedCount === 1 ? '' : 's'}`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={showAuto} onClose={() => setShowAuto(false)} title="Auto-push when this batch finishes crawling">
+        <div className="px-6 py-5 space-y-4">
+          <p className="text-[13px] text-slate-500 dark:text-slate-400">
+            Optional. Leave this off and nothing changes — you crawl, review the tiers, press
+            <strong> Push to Campaign</strong>, then press <strong>Start</strong> as usual.
+            Switched on, the audited prospects are added to a campaign the moment the crawl finishes.
+            The campaign is <strong>never started automatically</strong>: it stays a draft until you press Start.
+          </p>
+
+          {batch.autoPushResult?.status && (
+            <div className="text-[12.5px] rounded-lg px-3 py-2 bg-slate-50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-300">
+              <strong>Last automatic run:</strong>{' '}
+              {batch.autoPushResult.status === 'pushed'
+                ? `added ${batch.autoPushResult.created} lead(s) to "${batch.autoPushResult.campaignName}"`
+                  + ` — of ${batch.autoPushResult.totalInBatch ?? '?'} in the batch,`
+                  + ` ${batch.autoPushResult.skippedNotEligible ?? 0} not audited/no email,`
+                  + ` ${batch.autoPushResult.skippedDuplicate ?? 0} already in the campaign`
+                : `${batch.autoPushResult.status} — ${batch.autoPushResult.reason}`}
+
+              {/* A failed automatic push is never retried on its own (a retry
+                  loop is the thing most likely to double-send), so recovery is
+                  an explicit click. This reuses the ordinary manual push
+                  against this batch's saved settings — the same already-gated
+                  endpoint the "Push to Campaign" button uses, with no new
+                  authority and no new backend path. The campaign+email unique
+                  index means pressing it twice cannot duplicate a lead.
+                  It deliberately does NOT rewrite autoPushResult, which is the
+                  record of what the AUTOMATION did — hence the label above. */}
+              {['error', 'skipped'].includes(batch.autoPushResult.status) && batch.autoPushCampaign && (
+                <div className="mt-2">
+                  <Button
+                    variant="outline"
+                    disabled={retrying}
+                    onClick={async () => {
+                      setRetrying(true);
+                      try {
+                        await pushToCampaign(id, {
+                          campaignId: String(batch.autoPushCampaign),
+                          tiers: batch.autoPushTiers || [],
+                          requireFindings: batch.autoPushRequireFindings !== false,
+                        });
+                        await loadBatch(id);
+                      } catch { /* store surfaced the error */ } finally {
+                        setRetrying(false);
+                      }
+                    }}
+                  >
+                    <Repeat size={13} /> {retrying ? 'Retrying…' : 'Retry this push now'}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Campaign to fill</label>
+            <Select value={autoCampaignId} onChange={(e) => setAutoCampaignId(e.target.value)}>
+              <option value="">Select a draft or paused campaign…</option>
+              {campaigns.filter((c) => ['draft', 'paused'].includes(c.status))
+                .map((c) => <option key={c._id} value={c._id}>{c.name} ({c.status})</option>)}
+            </Select>
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Tiers to include</label>
+            <div className="flex flex-wrap gap-2">
+              {['hot', 'high', 'medium', 'low'].map((tr) => (
+                <button key={tr} type="button"
+                  onClick={() => setAutoTiers((prev) => prev.includes(tr) ? prev.filter((x) => x !== tr) : [...prev, tr])}
+                  className={cn('px-2.5 py-1 rounded-full text-[12px] font-semibold border transition-colors',
+                    autoTiers.includes(tr) ? 'bg-primary-600 text-white border-primary-600'
+                      : 'border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300')}>
+                  {TIER_BADGE[tr]?.label || tr}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-[13px] text-slate-600 dark:text-slate-300">
+            <input type="checkbox" checked={autoRequireFindings} onChange={(e) => setAutoRequireFindings(e.target.checked)} />
+            Only push prospects that have at least one audit finding
+          </label>
+
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <div>
+              {batch.autoPushEnabled && (
+                <Button variant="outline" disabled={savingAuto}
+                  onClick={async () => {
+                    setSavingAuto(true);
+                    try { await setAutoPush(id, { enabled: false }); setShowAuto(false); }
+                    catch { /* store surfaced it */ } finally { setSavingAuto(false); }
+                  }}>
+                  Turn off
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => setShowAuto(false)}>Cancel</Button>
+              <Button disabled={!autoCampaignId || savingAuto}
+                onClick={async () => {
+                  setSavingAuto(true);
+                  try {
+                    await setAutoPush(id, { enabled: true, campaignId: autoCampaignId, tiers: autoTiers, requireFindings: autoRequireFindings });
+                    setShowAuto(false);
+                  } catch { /* store surfaced it */ } finally { setSavingAuto(false); }
+                }}>
+                <Repeat size={14} /> {savingAuto ? 'Saving…' : 'Enable auto-push'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </Page>
   );
 }

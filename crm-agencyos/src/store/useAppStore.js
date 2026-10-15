@@ -1258,6 +1258,40 @@ const useAppStore = create((set, get, store) => ({
       throw err;
     }
   },
+  // Push audited prospects into an email campaign as leads carrying their
+  // audit snapshot (see backend prospectAuditController.pushToCampaign).
+  pushProspectsToCampaign: async (batchId, body) => {
+    try {
+      const { data } = await prospectAuditsAPI.pushToCampaign(batchId, body);
+      const r = data.data || {};
+      const extra = [
+        r.skippedDuplicate ? `${r.skippedDuplicate} already in the campaign` : '',
+        r.skippedNoFindings ? `${r.skippedNoFindings} with no audit findings` : '',
+      ].filter(Boolean).join(', ');
+      toast.success(`${r.created} lead${r.created === 1 ? '' : 's'} added to "${r.campaignName}"${extra ? ` — skipped ${extra}` : ''}`);
+      return r;
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to push prospects to campaign');
+      throw err;
+    }
+  },
+
+  // Turn the optional batch-complete auto-push on or off. Nothing else in the
+  // prospect/campaign flow changes when this is left alone.
+  setProspectAutoPush: async (batchId, body) => {
+    try {
+      const { data } = await prospectAuditsAPI.setAutoPush(batchId, body);
+      set((s) => ({
+        prospectAuditBatches: s.prospectAuditBatches.map((b) => (sameId(b, batchId) ? data.data : b)),
+      }));
+      toast.success(body.enabled === false ? 'Auto-push turned off' : 'Auto-push enabled for this batch');
+      return data.data;
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save auto-push settings');
+      throw err;
+    }
+  },
+
   importProspectAuditsSheet: async (batchId, googleSheetUrl) => {
     try {
       const { data } = await prospectAuditsAPI.importSheet(batchId, googleSheetUrl);
@@ -1888,7 +1922,13 @@ const useAppStore = create((set, get, store) => ({
       const [uR, cR, tR, dR, mR, nR, chR, svR, pR, lR, setR] = await Promise.all([
         usersAPI.getAll(), clientsAPI.getAll(), tasksAPI.getAll(), todosAPI.getAll(), meetingsAPI.getAll(),
         notificationsAPI.getAll(), channelsAPI.getAll(), servicesAPI.getAll(), projectsAPI.getAll(),
-        leadsAPI.getAll(),
+        // Tolerate a 403 here the same way settings does below. 'leads' is an
+        // admin-configurable feature (Settings → Feature Access Control) and
+        // members are deliberately excluded from it, so for them this call
+        // legitimately fails — un-caught inside Promise.all it rejects the
+        // whole batch, leaving users/tasks/todos/clients/messages unset and
+        // the entire app empty for every member.
+        leadsAPI.getAll().catch(() => ({ data: { data: [] } })),
         settingsAPI.get().catch(() => ({ data: { data: null } }))
       ]);
       const users = uR.data.data;

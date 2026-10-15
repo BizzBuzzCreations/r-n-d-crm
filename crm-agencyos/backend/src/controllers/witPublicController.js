@@ -22,9 +22,20 @@ const notifService = require('../services/notificationService');
 
 const SESSION_TIMEOUT_MIN = 30;
 
+// These handlers take their input straight from the public tracking
+// endpoints, and several of these fields are used directly in Mongo queries
+// (sessionId, visitorId, path). A JSON object value such as {"$ne": null}
+// would otherwise reach the query as an operator and match/overwrite other
+// websites' sessions and pageviews. Coerce every identifier to a string at
+// the boundary — non-strings become '' and fail the existing required checks.
+const str = (v) => (typeof v === 'string' ? v : (typeof v === 'number' ? String(v) : ''));
+
 async function resolveWebsite(trackingId) {
   if (!trackingId) return null;
-  return TrackedWebsite.findOne({ trackingId, isActive: true });
+  // Coerced to a string: these bodies come straight off the public tracking
+  // endpoints, so a JSON value like {"$ne": null} would otherwise reach the
+  // query as a Mongo operator and resolve to an arbitrary active website.
+  return TrackedWebsite.findOne({ trackingId: String(trackingId), isActive: true });
 }
 
 // Atomic upsert — two near-simultaneous pageviews for the same visitor (a
@@ -59,7 +70,10 @@ async function touchVisitor(website, visitorId, geo) {
 exports.pageview = async (req, res) => {
   res.status(204).end(); // never make a real visitor's page wait on this
   try {
-    const { trackingId, visitorId, sessionId, isNewSession, url, path, title, referrer, utm } = req.body || {};
+    const b = req.body || {};
+    const { isNewSession, utm } = b;
+    const trackingId = str(b.trackingId), visitorId = str(b.visitorId), sessionId = str(b.sessionId);
+    const url = str(b.url), path = str(b.path), title = str(b.title), referrer = str(b.referrer);
     if (!trackingId || !visitorId || !sessionId || !path) return;
 
     const website = await resolveWebsite(trackingId);
@@ -130,7 +144,9 @@ exports.pageview = async (req, res) => {
 exports.pageend = async (req, res) => {
   res.status(204).end();
   try {
-    const { trackingId, sessionId, path, duration, maxScrollDepth } = req.body || {};
+    const b = req.body || {};
+    const { duration, maxScrollDepth } = b;
+    const trackingId = str(b.trackingId), sessionId = str(b.sessionId), path = str(b.path);
     if (!trackingId || !sessionId || !path) return;
     const website = await resolveWebsite(trackingId);
     if (!website) return;
@@ -160,7 +176,8 @@ exports.pageend = async (req, res) => {
 exports.ping = async (req, res) => {
   res.status(204).end();
   try {
-    const { trackingId, visitorId, sessionId } = req.body || {};
+    const b = req.body || {};
+    const trackingId = str(b.trackingId), visitorId = str(b.visitorId), sessionId = str(b.sessionId);
     if (!trackingId || !visitorId || !sessionId) return;
     const website = await resolveWebsite(trackingId);
     if (!website) return;
@@ -182,7 +199,10 @@ exports.ping = async (req, res) => {
 exports.formEvent = async (req, res) => {
   res.status(204).end();
   try {
-    const { trackingId, sessionId, visitorId, formId, type, fieldName, fieldOrder, url, path } = req.body || {};
+    const b = req.body || {};
+    const { fieldOrder } = b;
+    const trackingId = str(b.trackingId), sessionId = str(b.sessionId), visitorId = str(b.visitorId);
+    const formId = str(b.formId), type = str(b.type), fieldName = str(b.fieldName), url = str(b.url), path = str(b.path);
     if (!trackingId || !sessionId || !visitorId || !formId || !type) return;
     const website = await resolveWebsite(trackingId);
     if (!website) return;

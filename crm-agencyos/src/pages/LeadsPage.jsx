@@ -19,6 +19,15 @@ import {
   ChevronUp, ChevronDown, Eye, EyeOff, Download, Upload, Archive, FolderOpen, Lock, Save, Globe2
 } from 'lucide-react';
 
+// Values here can come from anonymous public forms and scraped listings, so a
+// cell starting with = + - @ (or a control char) would be executed as a
+// formula when the export is opened in Excel/Sheets. Prefixing with an
+// apostrophe forces it to be read as text.
+const csvCell = (c) => {
+  const s = String(c ?? '').replace(/"/g, '""');
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+};
+
 // ── Standard Funnel Stage Constants ───────────────────────────
 const STAGES = ['New Lead', 'First Contact', 'Proposal Sent', 'Won', 'Lost'];
 
@@ -1034,7 +1043,7 @@ export default function LeadsPage() {
 
   // ── CSV Download Exporter ──
   const downloadCSV = (rows, filename) => {
-    const csv  = rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv  = rows.map((r) => r.map((c) => `"${csvCell(c)}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');

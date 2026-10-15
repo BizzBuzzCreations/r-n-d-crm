@@ -468,6 +468,15 @@ export const prospectAuditsAPI = {
     return api.post(`/prospect-audits/${id}/import`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
   importSheet: (id, googleSheetUrl) => api.post(`/prospect-audits/${id}/import`, { googleSheetUrl }),
+
+  // Creates CampaignLeads from this batch's audited prospects, each carrying
+  // an audit snapshot the campaign's merge tags can quote. Requires both the
+  // prospect_audit and campaigns features.
+  pushToCampaign: (id, body) => api.post(`/prospect-audits/${id}/push-to-campaign`, body),
+
+  // Optional automation: push this batch into a campaign automatically when it
+  // finishes crawling. Off unless switched on; pass { enabled: false } to stop.
+  setAutoPush: (id, body) => api.put(`/prospect-audits/${id}/auto-push`, body),
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -554,6 +563,21 @@ export const payrollAPI = {
     const fd = new FormData();
     Object.entries(body).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') fd.append(k, v); });
     return api.post('/payroll/leaves', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  // Leave attachments are personal documents (medical certificates), so
+  // /api/media?d=leaves now requires a session plus ownership. A plain
+  // <a href> can't carry the Authorization header, and putting the JWT in the
+  // URL would leak it into logs and browser history — so fetch the bytes
+  // through the authenticated axios instance and hand back a temporary blob
+  // URL for the caller to open. Caller should revokeObjectURL when done.
+  openLeaveAttachment: async (storedUrl) => {
+    const m = /^\/uploads\/leaves\/([^/?#]+)$/.exec(storedUrl || '');
+    if (!m) return null;
+    const { data } = await api.get('/media', {
+      params: { d: 'leaves', f: m[1] },
+      responseType: 'blob',
+    });
+    return URL.createObjectURL(data);
   },
   updateLeaveStatus: (id, body)  => api.put(`/payroll/leaves/${id}/status`, body),
   deleteLeave:       (id)        => api.delete(`/payroll/leaves/${id}`),

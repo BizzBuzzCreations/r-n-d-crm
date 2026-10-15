@@ -6,7 +6,11 @@ const audit = require('../services/auditService');
 const { checkDomainAuth } = require('../utils/domainAuth');
 const { resolveIPv4 } = require('../utils/ipv4');
 
-const isPrivileged = (role) => role === 'admin' || role === 'manager' || role === 'read_only';
+// read_only was included here, which gave a read-only account full sight of
+// (and, via the other handlers, edit/delete/test over) every user's connected
+// mailbox — SMTP hosts, usernames and IMAP settings. The role is meant to be
+// view-only on business data, never an admin tier for credentials.
+const isPrivileged = (role) => role === 'admin' || role === 'manager';
 
 // GET /api/email-accounts
 // Admins/managers see every connected mailbox (needed to build company

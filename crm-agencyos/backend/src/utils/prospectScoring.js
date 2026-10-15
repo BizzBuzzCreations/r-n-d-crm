@@ -43,6 +43,10 @@ function calculateOpportunityScore(audit) {
   return Math.min(100, score);
 }
 
+// Findings that directly contradict "technically_sound" — if any of these is
+// present, the site is not sound no matter how the points happened to add up.
+const PROBLEM_FLAGS = ['no_ssl', 'slow_load', 'not_mobile_friendly', 'noindex_detected'];
+
 function buildFlags(audit, technicalScore, opportunityScore) {
   const flags = [];
   if (!audit.hasSSL) flags.push('no_ssl');
@@ -53,8 +57,21 @@ function buildFlags(audit, technicalScore, opportunityScore) {
   if ((audit.reviewsCount || 0) >= 20) flags.push('established_reviews');
   if (audit.hasNoindexTag) flags.push('noindex_detected');
   if (!audit.hasCanonicalTag) flags.push('no_canonical');
-  if (technicalScore < 30) flags.push('technically_sound');
+  // Was `technicalScore < 30`, which let a site be flagged 'slow_load' and
+  // 'technically_sound' simultaneously — the UI then showed a green
+  // "technically sound" badge next to a red "slow page load" one. Requires a
+  // genuinely clean result now: a low score AND no disqualifying finding.
+  // Scoring ran without the PageSpeed half, so performance/SEO problems
+  // simply weren't measured — surfaced so nobody reads a low technicalScore
+  // here as "this site is fine".
+  const incomplete = !!(audit.psiStatus && audit.psiStatus !== 'ok');
+  // Claiming a clean bill of health requires having actually looked: a low
+  // score with no PageSpeed data means "not measured", not "sound".
+  if (technicalScore < 10 && !incomplete && !flags.some((f) => PROBLEM_FLAGS.includes(f))) {
+    flags.push('technically_sound');
+  }
   if (opportunityScore >= 50) flags.push('high_opportunity');
+  if (incomplete) flags.push('incomplete_audit');
   return flags;
 }
 
@@ -72,14 +89,38 @@ function calculateProspectScores(audit) {
   const flags = buildFlags(audit, technicalScore, opportunityScore);
 
   // technicalScore is a NEED score — higher means MORE problems found, not
-  // fewer. So "skip" (the site's already fine, nothing to pitch) is a LOW
-  // technicalScore, not a high one. Everything else worth pitching gets
-  // tiered purely by how much marketing opportunity it shows.
+  // fewer. opportunityScore is the BUDGET/evidence-of-investment signal
+  // (running ads, analytics installed, a blog, real review volume).
+  //
+  // The tier used to be decided by need alone: `technicalScore < 30 → skip`,
+  // whatever the opportunity. That inverted the sales value of the list. A
+  // site with the basics right (SSL, viewport, title, known CMS, analytics)
+  // can only pass 30 by being fundamentally broken, so the single best
+  // prospect type — an established business actively spending on ads whose
+  // site merely underperforms (need 25, opportunity 100) — came out as
+  // 'skip', flagged 'technically_sound', and was passed over in the UI's
+  // tier filter. Meanwhile a neglected site with no budget signal at all
+  // (need 72, opportunity 15) ranked above it.
+  //
+  // Now both axes decide, and evidence of spending can never be skipped:
+  // the pitch for a high-opportunity prospect whose site is genuinely fine
+  // is a different conversation, not an absent one.
+  const incomplete = audit.psiStatus && audit.psiStatus !== 'ok';
   let tier;
-  if (technicalScore < 30) tier = 'skip';
-  else if (opportunityScore >= 50) tier = 'high';
-  else if (opportunityScore >= 25) tier = 'medium';
-  else tier = 'low';
+  if (opportunityScore >= 50) {
+    tier = technicalScore >= 20 ? 'hot' : 'high';
+  } else if (opportunityScore >= 25 && technicalScore >= 15) {
+    tier = 'medium';
+  } else if (technicalScore >= 10) {
+    tier = 'low';
+  } else if (incomplete) {
+    // Nothing much found, but the PageSpeed half never ran — that's "not
+    // measured", not "nothing wrong". Park it as low and let it be re-crawled
+    // rather than writing it off.
+    tier = 'low';
+  } else {
+    tier = 'skip';
+  }
 
   return { technicalScore, opportunityScore, tier, flags };
 }

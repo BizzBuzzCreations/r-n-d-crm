@@ -5,6 +5,7 @@ const ProspectAuditBatch = require('../models/ProspectAuditBatch');
 const ProspectAudit = require('../models/ProspectAudit');
 const { fetchGoogleSheetCsv } = require('../utils/googleSheet');
 const audit = require('../services/auditService');
+const { pushProspectsToCampaign } = require('../services/prospectPushService');
 
 // ── Batches ─────────────────────────────────────────────────────────────
 
@@ -233,6 +234,114 @@ exports.pauseCrawl = async (req, res, next) => {
       { new: true }
     );
     if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
+    res.json({ success: true, data: batch });
+  } catch (err) { next(err); }
+};
+
+// ── Bridge: Prospect Audit → Email Campaign ─────────────────────────────
+// POST /api/prospect-audits/:id/push-to-campaign
+// Body: { campaignId, tiers?: ['hot','high'], minOpportunity?, requireFindings? }
+//
+// This is the link that was missing entirely: audits collected ~28 facts per
+// site and campaigns could read none of them, because the only route between
+// the two was a CSV export whose importer keeps 7 columns. Each created
+// CampaignLead carries an embedded auditSnapshot (point-in-time by design —
+// see the model comment) which the sender's merge tags read, so an email can
+// quote measured facts about that prospect's own website.
+exports.pushToCampaign = async (req, res, next) => {
+  try {
+    const batch = await ProspectAuditBatch.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
+    if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
+
+    const { campaignId, tiers, minOpportunity, requireFindings = true } = req.body || {};
+
+    // All of the real work lives in services/prospectPushService so the cron's
+    // auto-push and this button cannot drift apart. The service returns a
+    // result instead of throwing, which this handler maps back to the exact
+    // status codes and messages it returned before the extraction.
+    const result = await pushProspectsToCampaign({ batch, campaignId, tiers, minOpportunity, requireFindings });
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, message: result.message });
+    }
+
+    audit.log(req, {
+      action: 'create', category: 'campaign',
+      targetId: result.campaignId, targetModel: 'Campaign', targetTitle: result.campaignName,
+      metadata: {
+        pushedFromBatch: String(batch._id),
+        created: result.created,
+        skippedDuplicate: result.skippedDuplicate,
+        skippedNoFindings: result.skippedNoFindings,
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        created: result.created,
+        skippedDuplicate: result.skippedDuplicate,
+        skippedNoFindings: result.skippedNoFindings,
+        skippedInvalidEmail: result.skippedInvalidEmail,
+        campaignId: result.campaignId,
+        campaignName: result.campaignName,
+      },
+    });
+  } catch (err) { next(err); }
+};
+
+// PUT /api/prospect-audits/:id/auto-push
+// Configure (or switch off) the optional auto-push for one batch.
+//
+// Opt-in by construction: a batch nobody calls this for keeps
+// autoPushEnabled=false and behaves exactly as batches always have. Gated by
+// BOTH prospect_audit and campaigns in routes/index.js, and the caller is
+// recorded as the authority the cron later runs under.
+exports.setAutoPush = async (req, res, next) => {
+  try {
+    const batch = await ProspectAuditBatch.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
+    if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
+
+    const { enabled, campaignId, tiers, requireFindings } = req.body || {};
+
+    if (enabled === false) {
+      batch.autoPushEnabled = false;
+      // Target and filters are kept, so switching back on doesn't mean
+      // re-picking everything; only the switch itself changes.
+      await batch.save();
+      return res.json({ success: true, data: batch });
+    }
+
+    if (!campaignId) {
+      return res.status(400).json({ success: false, message: 'Choose a campaign to push into' });
+    }
+    const Campaign = require('../models/Campaign');
+    const campaign = await Campaign.findOne({ _id: campaignId, isDeleted: { $ne: true } }).select('status name').lean();
+    if (!campaign) return res.status(404).json({ success: false, message: 'Campaign not found' });
+    // Checked here too, not only at push time, so the mistake surfaces while
+    // someone is looking at the screen rather than silently an hour later.
+    if (!['draft', 'paused'].includes(campaign.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `"${campaign.name}" is ${campaign.status}. Auto-push can only fill a draft or paused campaign.`,
+      });
+    }
+
+    batch.autoPushEnabled = true;
+    batch.autoPushCampaign = campaign._id;
+    batch.autoPushTiers = Array.isArray(tiers) ? tiers.map(String) : [];
+    batch.autoPushRequireFindings = requireFindings !== false;
+    batch.autoPushEnabledBy = req.user._id;
+    // Re-arm: turning it on again after a previous run should push the next
+    // time this batch completes, rather than being blocked by the old marker.
+    batch.autoPushedAt = null;
+    await batch.save();
+
+    audit.log(req, {
+      action: 'update', category: 'campaign',
+      targetId: batch._id, targetModel: 'ProspectAuditBatch', targetTitle: batch.name,
+      metadata: { autoPushEnabled: true, campaign: campaign.name, tiers: batch.autoPushTiers },
+    });
+
     res.json({ success: true, data: batch });
   } catch (err) { next(err); }
 };

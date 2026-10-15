@@ -42,6 +42,45 @@ const CampaignLeadSchema = new mongoose.Schema({
   businessType:  { type: String, default: '' },
   cityLocation:  { type: String, default: '' },
 
+  // ── Website audit snapshot ────────────────────────────────────────────
+  // Set when a lead is pushed here from a Prospect Audit batch (see
+  // prospectAuditController.pushToCampaign). Read by the merge tags in
+  // workers/campaignWorker.js so an email can quote measured facts about
+  // this specific prospect's website.
+  //
+  // Embedded, not a populated ref to ProspectAudit, for two reasons:
+  // sending must not depend on a join in the worker's hot path, and an audit
+  // claim is point-in-time — if the prospect fixes their site next week, the
+  // email already sent should still reflect what was actually measured when
+  // it was written. Same write-once reasoning as Lead's attribution blocks.
+  auditSnapshot: {
+    prospectId:       { type: mongoose.Schema.Types.ObjectId, ref: 'ProspectAudit', default: null },
+    auditedAt:        { type: Date, default: null },
+    website:          { type: String, default: '' },
+    tier:             { type: String, default: '' },
+    technicalScore:   { type: Number, default: null },
+    opportunityScore: { type: Number, default: null },
+    perfMobile:       { type: Number, default: null },
+    perfDesktop:      { type: Number, default: null },
+    seoScore:         { type: Number, default: null },
+    lcpMs:            { type: Number, default: null },
+    pageWeightKb:     { type: Number, default: null },
+    // Denormalised top sentence + the angle it belongs to. The angle is kept
+    // so reply rate per sales angle can be measured later (BACKLOG.md §1.4)
+    // without re-deriving it from the finding codes.
+    topFinding:       { type: String, default: '' },
+    primaryAngle:     { type: String, default: '' },
+    findings: {
+      type: [{
+        _id:      false,
+        code:     { type: String, default: '' },
+        angle:    { type: String, default: '' },
+        sentence: { type: String, default: '' },
+      }],
+      default: [],
+    },
+  },
+
   status: {
     type: String,
     enum: ['pending', 'scheduled', 'sending', 'sent', 'failed', 'bounced', 'replied', 'unsubscribed'],
@@ -60,6 +99,13 @@ const CampaignLeadSchema = new mongoose.Schema({
   sentAt:         { type: Date, default: null },
   openedAt:       { type: Date, default: null }, // most recent open — kept for fast sort/filter
   openCount:      { type: Number, default: 0 },
+  // Opens that passed the scanner/prefetch filter (non-scanner user agent and
+  // more than OPEN_NOTIFICATION_DELAY_GATE_MS after the send) — i.e. the ones
+  // plausibly made by a person. openCount above still counts every pixel hit,
+  // because the raw number is what the opens[] history reflects and what
+  // existing analytics show. This is the number the "hot" threshold uses, so
+  // that a low threshold can't be tripped by two automated fetches.
+  humanOpenCount: { type: Number, default: 0 },
   // Full history of opens (capped — see trackingController). openedAt/openCount
   // above are denormalized copies of this for cheap queries/stats.
   opens:          { type: [OpenEventSchema], default: [] },

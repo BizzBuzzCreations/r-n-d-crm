@@ -1,5 +1,9 @@
 const AuditLog = require('../models/AuditLog');
 
+// Neutralise regex metacharacters in user-supplied search text before it is
+// used as a $regex pattern.
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // @GET /api/audit — paginated + filterable log list (admin only)
 exports.getLogs = async (req, res, next) => {
   try {
@@ -27,9 +31,11 @@ exports.getLogs = async (req, res, next) => {
 
     if (search) {
       filter.$or = [
-        { 'actor.name':   { $regex: search, $options: 'i' } },
-        { 'target.title': { $regex: search, $options: 'i' } },
-        { 'target.ref':   { $regex: search, $options: 'i' } },
+        // Escaped: the raw search string went straight into a regex, so a
+        // stray '(' threw a 500 and a pathological pattern could pin the CPU.
+        { 'actor.name':   { $regex: escapeRegex(search), $options: 'i' } },
+        { 'target.title': { $regex: escapeRegex(search), $options: 'i' } },
+        { 'target.ref':   { $regex: escapeRegex(search), $options: 'i' } },
       ];
     }
 

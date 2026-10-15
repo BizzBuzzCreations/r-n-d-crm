@@ -30,6 +30,10 @@ const ProspectAuditSchema = new mongoose.Schema({
   },
   crawledAt: { type: Date, default: null },
   crawlError: { type: String, default: '' },
+  // Real HTTP status of the homepage fetch. A non-2xx body is still parseable
+  // HTML, so this is what stops an error/bot-wall page being scored as the
+  // prospect's actual site (see runTier1 in workers/prospectAuditWorker.js).
+  httpStatus: { type: Number, default: null },
 
   // ── Tier 1 — structural findings (plain HTTP fetch + cheerio) ─────────
   hasSSL:           { type: Boolean, default: false },
@@ -66,6 +70,12 @@ const ProspectAuditSchema = new mongoose.Schema({
 
   // ── Tier 2 — PageSpeed Insights findings ───────────────────────────────
   psiPerformanceScore:    { type: Number, default: null },
+  // Second PSI pass, desktop strategy. Only populated when the mobile score
+  // is below DESKTOP_PSI_MOBILE_CEILING (see prospectAuditWorker) — a second
+  // API call per prospect is not worth spending where no gap can exist.
+  psiPerformanceScoreDesktop: { type: Number, default: null },
+  // Total page transfer size from Lighthouse's total-byte-weight audit.
+  pageWeightKb:           { type: Number, default: null },
   psiSeoScore:            { type: Number, default: null },
   psiAccessibilityScore:  { type: Number, default: null },
   psiBestPracticesScore:  { type: Number, default: null },
@@ -75,11 +85,40 @@ const ProspectAuditSchema = new mongoose.Schema({
     inp: { type: Number, default: null },
   },
   psiFailedAudits: { type: [String], default: [] },
+  tti: { type: Number, default: null }, // Time to Interactive — kept under its own name (was wrongly stored as coreWebVitals.inp)
+  // Whether the PageSpeed half of the audit actually ran. Without this, a
+  // failed PSI call is indistinguishable from a site that scored perfectly:
+  // every PSI branch in prospectScoring tests `!= null`, so missing data read
+  // as "no problems found" and mis-tiered real prospects as 'skip'.
+  psiStatus: { type: String, enum: ['pending', 'ok', 'failed', 'skipped'], default: 'pending' },
+  psiError:  { type: String, default: '' },
+  needsRecrawl: { type: Boolean, default: false },
 
   // ── Output ──────────────────────────────────────────────────────────
+  // Ranked, human-readable proof points built by utils/auditFindings.js from
+  // the measurements above. These are what a campaign email actually quotes
+  // (via the {{top_finding}} / {{findings_list}} merge tags), so they are
+  // generated once at crawl time and then travel with the lead as a
+  // point-in-time snapshot — see CampaignLead.auditSnapshot.
+  findings: {
+    type: [{
+      _id:      false,
+      code:     { type: String, default: '' },
+      angle:    { type: String, default: '' },
+      severity: { type: Number, default: 0 },
+      title:    { type: String, default: '' },
+      sentence: { type: String, default: '' },
+    }],
+    default: [],
+  },
+  // Denormalised highest-ranked sentence, so the common case needs no array
+  // access in the sender's hot path.
+  topFinding:      { type: String, default: '' },
+  topFindingAngle: { type: String, default: '' },
+
   technicalScore:   { type: Number, default: null },
   opportunityScore: { type: Number, default: null },
-  tier:             { type: String, enum: ['high', 'medium', 'low', 'skip', 'no_site', null], default: null },
+  tier:             { type: String, enum: ['hot', 'high', 'medium', 'low', 'skip', 'no_site', null], default: null },
   flags:            { type: [String], default: [] },
 }, { timestamps: true });
 

@@ -8,7 +8,7 @@ const Campaign = require('../models/Campaign');
 const { syncCampaignLeadToPipeline } = require('../utils/leadPipelineSync');
 const notifService = require('../services/notificationService');
 const { notifyMainCrm } = require('../utils/mainCrmNotify');
-const { HOT_OPEN_THRESHOLD, SCANNER_UA_PATTERNS, OPEN_NOTIFICATION_DELAY_GATE_MS } = require('../utils/campaignConstants');
+const { HOT_OPEN_THRESHOLD, LEGACY_RAW_OPEN_THRESHOLD, SCANNER_UA_PATTERNS, OPEN_NOTIFICATION_DELAY_GATE_MS } = require('../utils/campaignConstants');
 
 // 1x1 transparent PNG
 const PIXEL = Buffer.from(
@@ -45,10 +45,34 @@ exports.trackOpen = async (req, res) => {
   ).then(async (updated) => {
     if (!updated) return;
 
+    // Was this particular hit plausibly a person? Same two tests that gate
+    // the "opened" notification further down (known scanner/proxy UA, or a
+    // hit landing suspiciously soon after send). Evaluated here too because
+    // the qualified counter — not the raw one — is what decides "hot", and
+    // the hot threshold is deliberately low (2).
+    const scannerUA = isLikelyScannerUA(userAgent);
+    const withinDelayGate = !!updated.sentAt && (now - updated.sentAt) < OPEN_NOTIFICATION_DELAY_GATE_MS;
+    const qualifiedOpen = !scannerUA && !withinDelayGate;
+
+    let humanOpens = updated.humanOpenCount || 0;
+    if (qualifiedOpen) {
+      // Separate atomic bump: whether an open qualifies depends on sentAt,
+      // which isn't known until the first update returns, so it can't be
+      // folded into the same $inc.
+      const bumped = await CampaignLead.findOneAndUpdate(
+        { _id: updated._id },
+        { $inc: { humanOpenCount: 1 } },
+        { new: true }
+      ).catch(() => null);
+      humanOpens = bumped?.humanOpenCount ?? humanOpens + 1;
+      if (bumped) updated.humanOpenCount = humanOpens;
+    }
+
     // Called on every open past the threshold, not just the first — safe/
     // idempotent by design (see leadPipelineSync.js), so it can't lose count
-    // under rapid-fire opens racing each other.
-    if (updated.openCount >= HOT_OPEN_THRESHOLD) {
+    // under rapid-fire opens racing each other. The legacy raw-open rule is
+    // OR'd in for leads that predate humanOpenCount (see campaignConstants).
+    if (humanOpens >= HOT_OPEN_THRESHOLD || updated.openCount >= LEGACY_RAW_OPEN_THRESHOLD) {
       syncCampaignLeadToPipeline(updated, 'hot').catch(() => {});
     }
 
@@ -66,9 +90,8 @@ exports.trackOpen = async (req, res) => {
       // sync); only the human-facing "opened" notification is gated here,
       // on a known scanner/proxy UA or a hit landing suspiciously soon
       // after send (bots fetch near-instantly, real readers don't).
-      const scannerUA = isLikelyScannerUA(userAgent);
-      const withinDelayGate = !!updated.sentAt && (now - updated.sentAt) < OPEN_NOTIFICATION_DELAY_GATE_MS;
-
+      // scannerUA / withinDelayGate are computed once above, where they also
+      // decide whether this open counts toward humanOpenCount.
       if (scannerUA || withinDelayGate) {
         const reason = scannerUA ? 'scanner-ua' : 'delay-gate';
         const msSinceSent = updated.sentAt ? now - updated.sentAt : 'n/a';
@@ -112,16 +135,28 @@ exports.requestCall = async (req, res) => {
   const now = new Date();
   const io = req.app.get('io');
 
+  // Mail security scanners (Safe Links, Proofpoint, Mimecast) and image/link
+  // prefetchers hit every URL in an email with a plain GET before a human
+  // sees it — the exact reason unsubscribe is split into a confirm page plus
+  // a POST. This endpoint mutates on GET, so an unguarded scan manufactured a
+  // "call requested" flag, a pipeline sync, a sales notification AND an
+  // outbound report to the main CRM for someone who never clicked anything.
+  // Gate the side effects (not the redirect) on the same UA heuristic the
+  // open pixel already uses.
+  const isScanner = isLikelyScannerUA(req.headers['user-agent'] || '');
+
   // Unlike trackOpen's pixel (which can't wait on anything before
   // responding), the redirect destination here genuinely depends on which
   // campaign the click belongs to, so this lookup has to be awaited.
-  const updated = await CampaignLead.findOneAndUpdate(
-    { token },
-    { $set: { callRequested: true, callRequestedAt: now } },
-    { new: true }
-  ).catch(() => null);
+  const updated = isScanner
+    ? await CampaignLead.findOne({ token }).catch(() => null)
+    : await CampaignLead.findOneAndUpdate(
+      { token },
+      { $set: { callRequested: true, callRequestedAt: now } },
+      { new: true }
+    ).catch(() => null);
 
-  if (updated) syncCampaignLeadToPipeline(updated, 'call_requested').catch(() => {});
+  if (updated && !isScanner) syncCampaignLeadToPipeline(updated, 'call_requested').catch(() => {});
 
   // The public destination page recipients actually land on — a separate
   // site (e.g. debtfreepath), not this CRM. Per-campaign setting first
@@ -139,7 +174,7 @@ exports.requestCall = async (req, res) => {
     // notification must never be awaited/delay it (same principle as trackOpen).
     // Recipients are configured in Settings → Notification Routing — see
     // notificationService.dispatchByRouting.
-    if (campaign) {
+    if (campaign && !isScanner) {
       const who = [updated.firstName, updated.lastName].filter(Boolean).join(' ') || updated.email;
       notifService.dispatchByRouting(io, 'campaign', {
         type: 'call_requested',
@@ -173,6 +208,13 @@ exports.trackResponse = async (req, res) => {
   res.set('Content-Type', 'text/html');
   if (!option) {
     return res.send(PAGE('Link no longer valid', `<h1>Link no longer valid</h1><p>No response option was specified.</p>`));
+  }
+
+  // Same scanner gate as requestCall — a prefetched response link used to
+  // record an answer (and notify sales) that the recipient never chose.
+  const isScanner = isLikelyScannerUA(req.headers['user-agent'] || '');
+  if (isScanner) {
+    return res.send(PAGE('Thanks!', `<h1>Thanks for letting us know</h1><p>We've recorded your response.</p>`));
   }
 
   const updated = await CampaignLead.findOneAndUpdate(
@@ -225,17 +267,30 @@ exports.trackClick = async (req, res) => {
   } catch { /* invalid URL — fall through to safe fallback below */ }
 
   const now = new Date();
-  CampaignLead.updateOne(
+  // Store ONLY the validated http(s) destination, never the raw param. The
+  // protocol check above already keeps a `javascript:` URL out of the
+  // redirect, but persisting `dest || rawUrl` still wrote it to the DB, and
+  // CampaignDetailPage renders each click as <a href={e.url}> — so a
+  // recipient could use their own tracking link to store an executable URL
+  // that fires for whoever opens that campaign's click history.
+  const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/$/, '');
+
+  // Require the token to resolve before honouring an arbitrary ?url=. This
+  // endpoint previously redirected anywhere on request regardless of whether
+  // the token existed, which made the sending domain a free open redirect
+  // for phishing. See BACKLOG.md — signing the url param at generation time
+  // is the complete fix, but it needs a transition plan for emails already
+  // sitting in inboxes with unsigned links.
+  const lead = await CampaignLead.findOneAndUpdate(
     { token },
     {
       $inc: { clickCount: 1 },
       $set: { clickedAt: now },
-      $push: { clicks: { $each: [{ at: now, url: dest || rawUrl }], $slice: -50 } },
+      $push: { clicks: { $each: [{ at: now, url: dest || '' }], $slice: -50 } },
     }
-  ).catch(() => {});
+  ).catch(() => null);
 
-  const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/$/, '');
-  res.redirect(302, dest || clientUrl);
+  res.redirect(302, (lead && dest) ? dest : clientUrl);
 };
 
 const PAGE = (title, body) => `<!DOCTYPE html>

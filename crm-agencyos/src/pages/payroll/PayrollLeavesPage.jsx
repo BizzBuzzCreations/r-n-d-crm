@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Plus, Filter, Eye, Check, X, Trash2, CalendarOff, Paperclip } from 'lucide-react';
 import useAppStore from '../../store/useAppStore';
-import { payrollAPI, avatarUrl } from '../../services/api';
+import { payrollAPI } from '../../services/api';
 import { Page, Button, Modal, EmptyState, ConfirmDialog, Avatar } from '../../components/ui';
 import { fmtDate } from '../../utils/helpers';
 
@@ -378,9 +378,26 @@ function LeaveDetailModal({ leave, onClose, isManager, isApprover, isOwner, onUp
           {row('Days', Number(leave.days).toFixed(2))}
           {(leave.startBreakdown === 'half' || leave.endBreakdown === 'half') && row('Breakdown', `Start: ${leave.startBreakdown === 'half' ? 'Half day' : 'Full day'} · End: ${leave.endBreakdown === 'half' ? 'Half day' : 'Full day'}`)}
           {leave.attachment?.url && row('Attachment', (
-            <a href={avatarUrl(leave.attachment.url)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-300 hover:underline">
+            // Fetched through the authenticated API rather than linked
+            // directly — /uploads/leaves is no longer publicly served and
+            // /api/media?d=leaves checks ownership (see services/api.js).
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const href = await payrollAPI.openLeaveAttachment(leave.attachment.url);
+                  if (!href) return toast.error('Attachment unavailable');
+                  window.open(href, '_blank', 'noopener');
+                  // Give the new tab time to load before dropping the blob.
+                  setTimeout(() => URL.revokeObjectURL(href), 60000);
+                } catch {
+                  toast.error('You are not authorized to view this attachment');
+                }
+              }}
+              className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-300 hover:underline"
+            >
               <Paperclip size={12} /> {leave.attachment.name || 'View file'}
-            </a>
+            </button>
           ))}
           {row('Reason', leave.reason || '—')}
           {leave.actionedBy && row('Actioned by', `${leave.actionedBy.name}${leave.actionedAt ? ` · ${fmtDate(leave.actionedAt)}` : ''}`)}

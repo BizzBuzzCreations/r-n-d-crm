@@ -157,7 +157,9 @@ exports.createLead = async (req, res, next) => {
     // lead data back) and never clobbers whatever an agent has since done
     // with it (status changes, notes, assignment).
     if (externalLeadId) {
-      const existing = await Lead.findOne({ externalLeadId }).populate('assignedTo', 'name email avatar color initials position');
+      // String()-coerced: a body value of {"$gt": ""} would otherwise match
+      // an arbitrary existing lead and return someone else's record.
+      const existing = await Lead.findOne({ externalLeadId: String(externalLeadId) }).populate('assignedTo', 'name email avatar color initials position');
       if (existing) {
         const enriched = existing.toObject();
         enriched.healthScore = calculateHealthScore(existing);
@@ -231,7 +233,7 @@ exports.createLead = async (req, res, next) => {
 
     // Broadcast socket creation
     const io = req.app.get('io');
-    io?.emit('lead:created', enriched);
+    io?.to('leads').emit('lead:created', enriched);
 
     audit.log(req, {
       action: 'create', category: 'lead',
@@ -356,7 +358,11 @@ exports.updateLead = async (req, res, next) => {
 
       // If Won: Complete Handshake (Auto create Client Profile & Project)
       if (status === 'Won') {
-        let client = await Client.findOne({ name: { $regex: new RegExp(`^${lead.companyName.trim()}$`, 'i') } });
+        // companyName is free text and can arrive from an anonymous public
+        // form, so it must be escaped before becoming a regex — an
+        // unbalanced `(` threw a 500 and made the lead impossible to mark Won.
+        const escapedName = lead.companyName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        let client = await Client.findOne({ name: { $regex: new RegExp(`^${escapedName}$`, 'i') } });
         if (!client) {
           client = await Client.create({
             name: lead.companyName,
@@ -398,7 +404,7 @@ exports.updateLead = async (req, res, next) => {
         io?.emit('project:created', project);
 
         // Broadcast celebration alert
-        io?.emit('lead:won:alert', {
+        io?.to('leads').emit('lead:won:alert', {
           companyName: lead.companyName,
           value: lead.dealValue,
           clientUrl: `/clients`
@@ -523,7 +529,7 @@ exports.updateLead = async (req, res, next) => {
     }
 
     // Broadcast update
-    io?.emit('lead:updated', enriched);
+    io?.to('leads').emit('lead:updated', enriched);
 
     // Lead Lost notification
     if (status === 'Lost' && oldStatus !== 'Lost') {
@@ -602,7 +608,7 @@ exports.sendLeadEmail = async (req, res, next) => {
     await lead.save();
 
     const io = req.app.get('io');
-    io?.emit('lead:updated', lead.toObject());
+    io?.to('leads').emit('lead:updated', lead.toObject());
 
     audit.log(req, {
       action: 'email_sent', category: 'lead',
@@ -625,7 +631,7 @@ exports.deleteLead = async (req, res, next) => {
     await Lead.findByIdAndDelete(req.params.id);
 
     const io = req.app.get('io');
-    io?.emit('lead:deleted', req.params.id);
+    io?.to('leads').emit('lead:deleted', req.params.id);
 
     audit.log(req, {
       action: 'delete', category: 'lead',
@@ -704,12 +710,12 @@ exports.mergeLeads = async (req, res, next) => {
     const io = req.app.get('io');
     
     // Broadcast delete event for merged lead, update for remaining lead
-    io?.emit('lead:deleted', sourceLeadId);
+    io?.to('leads').emit('lead:deleted', sourceLeadId);
     
     const populated = await Lead.findById(target._id).populate('assignedTo', 'name email avatar color initials position');
     const enriched = populated.toObject();
     enriched.healthScore = calculateHealthScore(populated);
-    io?.emit('lead:updated', enriched);
+    io?.to('leads').emit('lead:updated', enriched);
 
     res.json({ success: true, message: 'Leads successfully merged.', data: enriched });
   } catch (err) { next(err); }
@@ -723,8 +729,12 @@ exports.bulkCreateLeads = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Payload must contain leads array' });
     }
 
-    // Programmatically calculate sequential leadId values to ensure CSV imports are aligned
-    const nextNum = await Lead.getNextLeadNumber();
+    // Reserve one number per row up front (see Lead.getNextLeadNumber) —
+    // reserving a single number and then using nextNum+index for the rest
+    // left the counter behind by leads.length-1, so the next single lead
+    // created re-used an id this import had already taken and died on the
+    // unique leadId index.
+    const nextNum = await Lead.getNextLeadNumber(leads.length);
 
     const prepared = [];
     for (let index = 0; index < leads.length; index++) {
@@ -745,6 +755,10 @@ exports.bulkCreateLeads = async (req, res, next) => {
 
       prepared.push({
         leadId: `LD-${nextNum + index}`,
+        // insertMany below bypasses Mongoose's pre('save') hook, which is
+        // what normally sets this — imported leads were landing with no SLA
+        // deadline at all, so autoCheckSLA could never flag them as breached.
+        slaDeadline: new Date(Date.now() + 2 * 60 * 60 * 1000),
         companyName: l.companyName || 'Unnamed B2B Lead',
         contactPerson: l.contactPerson || 'Undecided',
         email: l.email || '',
@@ -775,7 +789,7 @@ exports.bulkCreateLeads = async (req, res, next) => {
     // Broadcast socket created event for each new lead
     const io = req.app.get('io');
     results.forEach(enriched => {
-      io?.emit('lead:created', enriched);
+      io?.to('leads').emit('lead:created', enriched);
     });
 
     res.status(201).json({ success: true, count: results.length, data: results });

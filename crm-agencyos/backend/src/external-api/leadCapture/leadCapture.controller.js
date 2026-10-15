@@ -74,7 +74,7 @@ exports.captureLead = async (req, res) => {
     });
 
     const io = req.app.get('io');
-    io?.emit('lead:created', lead.toObject());
+    io?.to('leads').emit('lead:created', lead.toObject());
 
     // Fire-and-forget, same principle as witPublicController.captureLead —
     // never let a notification write delay or risk this response.
