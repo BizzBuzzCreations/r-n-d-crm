@@ -330,7 +330,14 @@ export default function ProspectAuditDetailPage() {
   };
 
   const stats = useMemo(() => {
-    const s = { total: prospects.length, crawled: 0, high: 0, medium: 0, low: 0, skip: 0, no_site: 0 };
+    // Every tier in ProspectAudit's enum is initialised here, so a tier with
+    // zero prospects renders 0 rather than undefined — and, more importantly,
+    // so adding a tier to the model without adding it here is visible rather
+    // than silently under-counted. That is exactly what happened to 'hot':
+    // it was reaching s[p.tier] via the dynamic increment below but had no
+    // key here and no card, so a batch containing hot prospects reported
+    // fewer than it held.
+    const s = { total: prospects.length, crawled: 0, hot: 0, high: 0, medium: 0, low: 0, skip: 0, no_site: 0 };
     for (const p of prospects) {
       if (p.crawlStatus !== 'pending' && p.crawlStatus !== 'crawling') s.crawled++;
       if (p.tier) s[p.tier] = (s[p.tier] || 0) + 1;
@@ -410,12 +417,17 @@ export default function ProspectAuditDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+      {/* One card per tier, so the tier cards always reconcile against the
+          prospects that carry a tier. 'hot' and 'skip' were both counted but
+          had no card, which under-reported any batch containing them. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 mb-6">
         <StatCard icon={Flame} label="Total" value={stats.total} color="#6366f1" bg="#eef2ff" />
         <StatCard icon={ShieldCheck} label="Crawled" value={stats.crawled} color="#1baf7a" bg="#ecfdf5" />
+        <StatCard icon={Flame} label="Hot Lead" value={stats.hot} color="#e11d48" bg="#fff1f2" />
         <StatCard icon={Flame} label="High Priority" value={stats.high} color="#dc2626" bg="#fef2f2" />
         <StatCard icon={ShieldAlert} label="Medium" value={stats.medium} color="#d97706" bg="#fffbeb" />
         <StatCard icon={ShieldQuestion} label="Low" value={stats.low} color="#64748b" bg="#f1f5f9" />
+        <StatCard icon={ShieldCheck} label="Skip" value={stats.skip} color="#059669" bg="#ecfdf5" />
         <StatCard icon={ShieldOff} label="No Site" value={stats.no_site} color="#94a3b8" bg="#f8fafc" />
       </div>
 
