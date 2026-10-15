@@ -257,14 +257,22 @@ items were:
 
 ---
 
-## 3. How to use the new flow
+## 3. The flow, end to end
 
-1. Import prospects into a batch and **Start Crawl**. Needs a PageSpeed
-   Insights API key in Settings → Integrations, otherwise audits run Tier 1
-   only and are flagged `incomplete_audit`.
-2. Review tiers. `hot` = evidence of ad spend plus fixable problems.
-3. Create a campaign (leave it `draft`), and write the email using audit tags,
-   e.g.
+### 3.1 What a person does
+
+1. **Create a batch and import prospects** — CSV or a public Google Sheet.
+   Import is unchanged by any of this work; there is no scraper integration.
+2. **Start Crawl.** The batch flips to `crawling` and the dispatcher takes over.
+3. **Review the tiers** when it completes. `hot` means evidence of marketing
+   spend *and* fixable problems — the strongest pitch in the list.
+4. **Get the prospects into a campaign**, either way:
+   * **Manually** — the **Push to Campaign** button: choose a draft/paused
+     campaign and which tiers to include.
+   * **Automatically (optional, OFF by default)** — the **Auto-push** button:
+     choose a campaign once, and every future completion of that batch pushes
+     itself. Leaving it off changes nothing about the manual flow.
+5. **Write the email** in the campaign, using audit merge tags:
 
    ```
    Hi team at {{first_name}},
@@ -274,60 +282,167 @@ items were:
    Happy to send the full breakdown for {{website}} if useful.
    ```
 
-4. On the batch page, **Push to Campaign** → pick the campaign and tiers.
-5. Start the campaign. If any pending lead lacks audit data while the body
-   uses audit tags, the start is refused with the count — that is the guard
-   working, not a bug.
+6. **Press Start.** A person always presses Start — nothing in this system
+   starts a campaign on its own.
+
+### 3.2 What the machine does
+
+```
+CSV / Google Sheet
+      │
+      ▼
+ProspectAuditBatch ──Start Crawl──▶ status: crawling
+      │
+      ▼  prospectAuditDispatcher  (API process, every minute)
+   claims up to 30 prospects/tick, round-robins 2 PageSpeed keys,
+   charges 2 PSI calls per prospect against a 25,000/day/key budget
+      │
+      ▼  prospect-audit-worker  (separate process, concurrency 5)
+   Tier 1: fetch homepage + cheerio  → SSL, viewport, title/meta, headings,
+           images/alt, JSON-LD (@graph walked), sitemap/robots, analytics,
+           ad pixel, CMS, broken-link sample
+   Tier 2: PageSpeed mobile (60s budget, 1 retry)
+           → scores, LCP/CLS, total-byte-weight → pageWeightKb
+   Tier 2b: PageSpeed desktop — ONLY when mobile < 70, since the only thing
+           that reads it is the mobile-vs-desktop gap finding
+      │
+      ▼  prospectScoring + auditFindings  (at crawl time)
+   technicalScore (need) × opportunityScore (budget signal) → tier
+   13 findings ranked by pitchValue × severity → findings[], topFinding
+      │
+      ├── manual:    POST /:id/push-to-campaign
+      └── automatic: autoCompleteFinishedBatches → autoPushCompletedBatch
+                     (atomic claim, authority re-check, fails safe)
+      │
+      ▼  prospectPushService  (ONE implementation, both callers)
+   draft/paused only · dedupes by campaign+email · skips no-email and
+   no-findings · embeds a point-in-time auditSnapshot on each CampaignLead
+      │
+      ▼  campaign stays DRAFT  ◀── a person presses Start
+      │
+      ▼  checkCampaignReady  — the send-safety gate
+      │
+      ▼  campaignDispatcher  (API process, every minute)
+   one email per campaign per tick, paced by minGap 9min + random 5min,
+   daily cap 30, sending window, per-mailbox warm-up limits
+      │
+      ▼  campaign-worker  (separate process)
+   renders merge tags (body HTML-escaped, subject header-safe),
+   injects open pixel + tracked links + unsubscribe, sends via SMTP
+      │
+      ▼  tracking + follow-up
+   opens (raw and qualified), clicks, IMAP reply detection, unsubscribe
+   → 2 qualified opens or a call request, then 48h → ONE follow-up
+```
+
+### 3.3 The safety gates, and what each one stops
+
+| Gate | Stops |
+|---|---|
+| `checkCampaignReady` on Start/Schedule | Starting a campaign whose email quotes audit facts that some pending lead cannot fill |
+| `checkAuditTagData` on campaign **edit** | Adding an audit tag to a **live** campaign its leads cannot fill (and no longer blocks unrelated edits — round 3) |
+| `importLeads` guard | Importing unaudited leads into a **live** audit-tag campaign, which would have sent blanks (round 4) |
+| `prospectPushService` draft/paused check | Any push — manual or automatic — into a running campaign |
+| Auto-push atomic claim | The same batch pushing twice when dispatcher ticks overlap |
+| Auto-push authority re-check | Automation continuing on the stale permissions of someone whose access was revoked |
+| `followUpStillValid` | A queued follow-up reaching someone who has since replied, unsubscribed or bounced |
+| `escHeader` on the subject | HTML escapes in subject lines, and header injection from a newline in an imported CSV cell |
+| `decodeEntities` in `stripToPlain` | The plain-text part of an email showing `You&#39;re` |
+
+Every one of these **fails closed**: it refuses to send rather than sending
+something wrong. That is the deliberate bias of the whole pipeline, because
+the failure mode it exists to prevent is a confident false claim about a
+stranger's own website.
+
+### 3.4 Processes that must be running
+
+| Process | Needed for |
+|---|---|
+| `npm start` (API) | HTTP, sockets, and the campaign/follow-up/reply/audit/ads/billing crons |
+| `npm run campaign-worker` | Actually sending campaign and follow-up email |
+| `npm run prospect-audit-worker` | Actually crawling and scoring prospect sites |
+| `npm run worker` | Transactional email (task/billing/meeting) |
+| `npm run social-publish-worker` | Social posting |
+
+MongoDB and Redis are required by all of them.
 
 ---
 
 ## 4. Verification
 
-No test runner exists in this repo, so verification was:
+No test runner exists in this repo. Verification was:
 
-- `node --check` on every changed backend file.
-- A module smoke-load of all changed modules (catches bad requires and
-  references that syntax checks miss).
+- `node --check` on every changed backend file, plus a module smoke-load
+  (catches bad requires and undefined references that syntax checks miss).
 - `npm run build` for the frontend.
-- Behavioural tests written for each piece of new logic: finding ranking and
-  predicates, merge-tag rendering (including that an unaudited lead renders
-  empty rather than `undefined`), HTML escaping, the hot-lead rule across five
-  cases, audit-tag detection, scoring/tiering across five prospect profiles,
-  the socket room allowlist, lead-number block reservation, upload extension
-  mapping, CSV escaping and the geoip ranges.
+- Behavioural probes against **real MongoDB** (a throwaway database, never the
+  dev one) for everything with a query in it, and pure-function probes for the
+  rest. Each probe asserts the before/after so it would fail if the change
+  were reverted.
+- **Independent review.** A second session (Claude B) reviewed every round
+  against its own probes rather than rerunning mine, and verified the
+  importLeads fix by sweeping *every* code path that can create or revive a
+  sendable lead — not just the one that changed.
+- **Email rendering proven on the wire**: the real renderer output was sent
+  through nodemailer into a MailHog sink and the received message inspected.
+  Subjects carry real apostrophes and ampersands, there is exactly one
+  `Subject` header, a `Bcc:` smuggled into a business name was neutralised
+  into inert text, and the text/plain part is entity-free.
 
-**Not verified:** anything requiring MongoDB, Redis and the worker processes
-running together. The push-to-campaign endpoint, the follow-up dispatcher and
-the merge tags have not been exercised against a live database. Before relying
-on them, run one real campaign to a small internal list.
+**Still unproven — needs your PageSpeed key.** No real PageSpeed call has been
+made (keyless requests return 429), so `total-byte-weight` and the
+`strategy=desktop` response shape are confirmed by reasoning only. It fails
+closed: if either is wrong, `pageWeightKb`/`perfDesktop` stay null, the
+`heavy_page` and `mobile_desktop_gap` findings never fire, and a campaign
+using `{{page_weight_mb}}`/`{{perf_desktop}}` refuses to start rather than
+sending a blank.
+
+**Also unproven:** no real campaign has been sent; the new UI is
+build-verified but no browser has rendered it; the audit cron hook has not run
+inside a live dispatcher process.
 
 ---
 
 ## 5. Not part of this work
 
 A `git pull origin main` during the session brought in **Admin Portal SSO**
-(`/api/auth/sso`, `ssoController.js`, `SsoTokenUse.js`). It was reviewed
-because it mints sessions and looks sound: RS256 with a public key,
-audience/issuer checks, one-time `jti` enforced by a unique index, blocks the
-`client` role, and fails closed when the key path is unset. One nit: its
-`BLOCKED_ROLES` comment says portal accounts must never reach "a client-portal
-or read-only session", but only `client` is blocked, not `read_only`.
+(`/api/auth/sso`, `ssoController.js`, `SsoTokenUse.js`). Reviewed because it
+mints sessions, and it looks sound: RS256 with a public key, audience/issuer
+checks, one-time `jti` enforced by a unique index, blocks the `client` role,
+fails closed when the key path is unset. One nit: its `BLOCKED_ROLES` comment
+says portal accounts must never reach "a client-portal or read-only session",
+but only `client` is blocked, not `read_only`.
 
 ---
 
-## 6. Next steps, in order
+## 6. Open items
 
-1. **Re-crawl one batch.** Existing prospects carry stale tiers and no
-   findings; with PageSpeed working they'll get real data for the first time.
-2. **Run one small real campaign** using `{{top_finding}}` and measure reply
-   rate against a generic control.
-3. **Angle routing** (`BACKLOG.md` §1.4) — the `angle` is already stored on
-   every finding and on `auditSnapshot.primaryAngle`, so reply rate per angle
-   is a simple aggregation and per-angle templates are the natural next step.
-4. **Hosted audit report page** (plan §3.7) — strongest CTA, and a view is a
-   high-intent signal.
-5. **Remaining security items** in `BACKLOG.md` §2, especially the upload
+### Known and deliberately left
+- **One-line temp-file leak**: a *refused* CSV import leaves its multer temp
+  file behind, because the guard returns before the cleanup call. Reviewed as
+  non-blocking; offered as a one-line change.
+- **A retry after a failed auto-push does not rewrite the automation's
+  record** — the stored line is labelled "Last automatic run" instead.
+- **`{{perf_desktop}}` is stricter than it looks**: desktop is only measured
+  when mobile scores under 70, so a template using that tag refuses to start
+  for every prospect at 70 or above.
+- Still open from the original review: `D-1` (a non-string `threadId` crashes
+  the API process), `A-8`, `A-10`, `A-11`, `A-12`, `B-3`. See `BACKLOG.md`.
+- **`B-2`, deferred by decision**: Gmail routes images through
+  `GoogleImageProxy`, which the scanner filter excludes, so qualified opens
+  never increment for Gmail recipients and they fall back to the 3-raw-open
+  rule.
+
+### Next steps, in order
+1. **Give PageSpeed a key** and re-crawl one batch. Existing prospects carry
+   stale tiers and no findings; this is also what closes the last unproven
+   item.
+2. **Send one small real campaign** using `{{top_finding}}` to an internal
+   list, and measure reply rate against a generic control.
+3. **Angle routing** (`BACKLOG.md` §1.4). Every finding already carries an
+   `angle`, and `auditSnapshot.primaryAngle` is stored on each lead, so reply
+   rate per angle is a simple aggregation — then per-angle templates.
+4. **Hosted audit report page** (plan §3.7) — the strongest call to action,
+   and a view is a high-intent signal.
+5. **Remaining security items** in `BACKLOG.md` §2, especially upload
    `Content-Disposition` hardening and enabling a real CSP.
-6. **Social publishing** still cannot post media (URLs are stored as relative
-   paths no platform can fetch) and has no token refresh. Now that accounts
-   can finally hold a token, that path needs end-to-end testing.

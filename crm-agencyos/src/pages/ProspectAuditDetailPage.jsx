@@ -288,6 +288,7 @@ export default function ProspectAuditDetailPage() {
   const [autoTiers, setAutoTiers] = useState(['hot', 'high']);
   const [autoRequireFindings, setAutoRequireFindings] = useState(true);
   const [savingAuto, setSavingAuto] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   // Store just the id, not the object — re-derived from the live `prospects`
   // list on every render, so the modal reflects a re-crawl or refresh
   // instead of showing a frozen snapshot from the moment it was opened.
@@ -623,13 +624,46 @@ export default function ProspectAuditDetailPage() {
 
           {batch.autoPushResult?.status && (
             <div className="text-[12.5px] rounded-lg px-3 py-2 bg-slate-50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-300">
-              <strong>Last run:</strong>{' '}
+              <strong>Last automatic run:</strong>{' '}
               {batch.autoPushResult.status === 'pushed'
                 ? `added ${batch.autoPushResult.created} lead(s) to "${batch.autoPushResult.campaignName}"`
                   + ` — of ${batch.autoPushResult.totalInBatch ?? '?'} in the batch,`
                   + ` ${batch.autoPushResult.skippedNotEligible ?? 0} not audited/no email,`
                   + ` ${batch.autoPushResult.skippedDuplicate ?? 0} already in the campaign`
                 : `${batch.autoPushResult.status} — ${batch.autoPushResult.reason}`}
+
+              {/* A failed automatic push is never retried on its own (a retry
+                  loop is the thing most likely to double-send), so recovery is
+                  an explicit click. This reuses the ordinary manual push
+                  against this batch's saved settings — the same already-gated
+                  endpoint the "Push to Campaign" button uses, with no new
+                  authority and no new backend path. The campaign+email unique
+                  index means pressing it twice cannot duplicate a lead.
+                  It deliberately does NOT rewrite autoPushResult, which is the
+                  record of what the AUTOMATION did — hence the label above. */}
+              {['error', 'skipped'].includes(batch.autoPushResult.status) && batch.autoPushCampaign && (
+                <div className="mt-2">
+                  <Button
+                    variant="outline"
+                    disabled={retrying}
+                    onClick={async () => {
+                      setRetrying(true);
+                      try {
+                        await pushToCampaign(id, {
+                          campaignId: String(batch.autoPushCampaign),
+                          tiers: batch.autoPushTiers || [],
+                          requireFindings: batch.autoPushRequireFindings !== false,
+                        });
+                        await loadBatch(id);
+                      } catch { /* store surfaced the error */ } finally {
+                        setRetrying(false);
+                      }
+                    }}
+                  >
+                    <Repeat size={13} /> {retrying ? 'Retrying…' : 'Retry this push now'}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 

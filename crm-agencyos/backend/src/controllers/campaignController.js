@@ -9,7 +9,8 @@ const { verifyEmail, verifyBatch } = require('../utils/emailVerify');
 const { fetchGoogleSheetCsv } = require('../utils/googleSheet');
 const { effectiveDailyLimit } = require('../utils/warmup');
 const { isWithinSendingWindow } = require('../utils/sendingWindow');
-const { checkCampaignReady } = require('../utils/campaignReadiness');
+const { checkCampaignReady, checkAuditTagData, sendableTemplates } = require('../utils/campaignReadiness');
+const { auditTagsUsed } = require('../utils/auditMergeTags');
 const { syncCampaignLeadToPipeline } = require('../utils/leadPipelineSync');
 const notifService = require('../services/notificationService');
 const { notifyMainCrm } = require('../utils/mainCrmNotify');
@@ -113,19 +114,23 @@ exports.updateCampaign = async (req, res, next) => {
       campaign.settings = { ...campaign.settings.toObject(), ...settings };
     }
 
-    // The audit-data gate in checkCampaignReady only runs on start/schedule,
-    // which left three ways to defeat it entirely on a campaign that is
-    // ALREADY running: edit the body to add {{top_finding}}, switch
-    // followUpEnabled on so a follow-up body full of audit tags becomes live,
-    // or import fresh leads with no snapshot. The first two land here, so
-    // re-check before saving and refuse rather than let a live campaign start
-    // rendering tags its leads cannot fill.
+    // The audit-data gate only runs on start/schedule, which left two ways to
+    // defeat it on a campaign that is ALREADY running: edit the body to add
+    // {{top_finding}}, or switch followUpEnabled on so a follow-up body full
+    // of audit tags becomes live. Both land here, so re-check before saving.
+    //
+    // checkAuditTagData, NOT checkCampaignReady: the full check also enforces
+    // the START preconditions (>=1 account, >=1 pending lead), which have no
+    // bearing on whether an edit is safe. Reusing it here refused every edit
+    // to an active campaign whose leads had all been sent — 0 pending, so
+    // "Import at least one lead before starting the campaign" came back for
+    // something as harmless as a rename.
     //
     // Only enforced while the campaign can actually send — a draft/paused
     // campaign is still being written, and blocking edits there would make
-    // the editor unusable (the gate runs again on start).
+    // the editor unusable (the full gate runs again on start).
     if (['active', 'scheduled'].includes(campaign.status)) {
-      const gate = await checkCampaignReady(campaign);
+      const gate = await checkAuditTagData(campaign);
       if (!gate.ready) {
         return res.status(400).json({
           success: false,
@@ -436,6 +441,33 @@ exports.importLeads = async (req, res, next) => {
   try {
     const campaign = await Campaign.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
     if (!campaign) return res.status(404).json({ success: false, message: 'Campaign not found' });
+
+    // An import NEVER carries website-audit data: CSV, Google Sheet and
+    // manual-add all produce the 7 contact columns and no auditSnapshot.
+    // (Audit data only arrives via prospectPushService, from a crawled batch.)
+    //
+    // So if a RUNNING campaign's email quotes audit facts, every lead added
+    // here is one the dispatcher will happily send with those tags rendered
+    // empty — "Your homepage takes  seconds to load" — to a real prospect,
+    // under the client's name. There is no later gate to catch it: the
+    // per-send path (cron/campaignDispatcher dispatchOneCampaign) only picks
+    // the next 'pending' lead and queues it, and checkCampaignReady runs just
+    // once at the scheduled->active promotion.
+    //
+    // Refused BEFORE anything is inserted, rather than inserted-then-checked,
+    // so there is no partial state to unpick. Draft/paused imports stay
+    // unrestricted — the full start gate catches those before a single send.
+    if (['active', 'scheduled'].includes(campaign.status)) {
+      const tags = auditTagsUsed(sendableTemplates(campaign));
+      if (tags.length) {
+        return res.status(400).json({
+          success: false,
+          message: `This campaign is ${campaign.status} and its email uses website-audit tags (${tags.map((t) => `{{${t}}}`).join(', ')}). `
+            + `Imported leads have no audit data, so they would send with those blank. `
+            + `Pause the campaign first, or add leads by pushing them from a Prospect Audit batch instead.`,
+        });
+      }
+    }
 
     let rows = [];
     if (req.file) {
