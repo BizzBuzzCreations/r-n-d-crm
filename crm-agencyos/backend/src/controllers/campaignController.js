@@ -407,7 +407,21 @@ const HEADER_ALIASES = {
   // literally the column name asked for alongside email/first/last name.
   phone:     ['phone', 'phone_number', 'phonenumber', 'phone number', 'number', 'mobile', 'mobile_number', 'contact_number', 'contact number'],
   // B2B import format — see CampaignLead.businessName/businessType/cityLocation.
-  businessName: ['business_name', 'businessname', 'business name', 'company_name', 'companyname', 'company name', 'company'],
+  //
+  // 'name' is here to match prospectAuditController's own businessName
+  // aliases exactly. Without it the SAME source CSV headed 'Name' — the usual
+  // shape of a Maps-scraped list — mapped one way into a prospect batch and
+  // another way into a campaign: businessName came back empty here, and
+  // {{first_name}} then rendered the literal 'there' ("Hi team at there,") to
+  // a real recipient, with no error anywhere.
+  //
+  // Caveat for whoever reads this field next: because a bare 'Name' column is
+  // accepted, businessName is NOT guaranteed to hold a company name — on a
+  // person-based import it may hold a person's. It is not recipient-visible
+  // on its own (the merge tag resolves businessName || firstName, so the
+  // email reads correctly either way); it only feeds segmenting alongside
+  // businessType/cityLocation. Do not treat it as certainly a company.
+  businessName: ['business_name', 'businessname', 'business name', 'company_name', 'companyname', 'company name', 'company', 'name'],
   businessType: ['business_type', 'businesstype', 'business type', 'industry'],
   cityLocation: ['city_location', 'citylocation', 'city location', 'city', 'location'],
 };
@@ -416,9 +430,18 @@ function normalizeHeader(h) { return String(h || '').trim().toLowerCase(); }
 
 function mapRow(row) {
   const keys = Object.keys(row);
+  // Aliases are tried IN ORDER, so the list expresses priority: the most
+  // specific header wins regardless of where it sits in the spreadsheet.
+  // Scanning the row's keys instead (the previous approach) let column ORDER
+  // decide, which matters now that a generic 'name' alias exists — a sheet
+  // carrying both 'Name' and 'Business Name' would otherwise resolve to
+  // whichever happened to come first.
   const find = (aliases) => {
-    const key = keys.find((k) => aliases.includes(normalizeHeader(k)));
-    return key ? String(row[key] || '').trim() : '';
+    for (const alias of aliases) {
+      const key = keys.find((k) => normalizeHeader(k) === alias);
+      if (key) return String(row[key] || '').trim();
+    }
+    return '';
   };
   return {
     email: find(HEADER_ALIASES.email).toLowerCase(),
