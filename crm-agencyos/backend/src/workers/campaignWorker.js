@@ -19,6 +19,8 @@ const Campaign     = require('../models/Campaign');
 const CampaignLead = require('../models/CampaignLead');
 const EmailAccount = require('../models/EmailAccount');
 const { resolveIPv4 } = require('../utils/ipv4');
+const { escHtml, escHeader, stripToPlain } = require('../utils/emailRender');
+const { makeRenderer, followUpStillValid } = require('../utils/campaignRender');
 
 mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 8000 })
   .then(() => console.log('✅ MongoDB connected (campaign worker)'))
@@ -88,91 +90,6 @@ async function getTransporter(account) {
   return transporter;
 }
 
-// ── Merge tags ────────────────────────────────────────────────────────────
-// Checkbox-style response options — one tracked link per configured option
-// (see Campaign.settings.responseOptions), each hitting
-// trackingController.trackResponse with its own ?option= value. Plain
-// tracked links, not AMP4Email — works in every client immediately, no
-// Google domain approval needed.
-function buildResponseOptionsHtml(options, token) {
-  if (!Array.isArray(options) || !options.length) return '';
-  const links = options.map((opt) => {
-    const url = `${apiBase}/api/campaigns/track/response/${token}?option=${encodeURIComponent(opt)}`;
-    return `<p style="margin:4px 0;"><a href="${url}">${opt}</a></p>`;
-  }).join('');
-  return `<div style="margin:16px 0;">${links}</div>`;
-}
-
-// Everything substituted into an email body is HTML-escaped. Lead fields come
-// from imported CSVs and public forms, and audit sentences embed values read
-// off the prospect's own page — none of it should be able to inject markup
-// into the email (or into the campaign preview that renders the same HTML).
-const esc = (v) => String(v ?? '')
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;')
-  .replace(/'/g, '&#39;');
-
-// ── Website-audit merge tags ──────────────────────────────────────────────
-// Populated only for leads pushed over from a Prospect Audit batch (see
-// CampaignLead.auditSnapshot). A campaign body that uses these is refused at
-// start time unless its pending leads actually carry a snapshot
-// (utils/campaignReadiness.js), and the dispatcher fails any individual lead
-// that slipped through — an email reading "takes undefined seconds" is worse
-// than no email at all.
-function renderAuditTags(template, lead) {
-  const a = lead.auditSnapshot || {};
-  const findings = Array.isArray(a.findings) ? a.findings : [];
-  const lcp = a.lcpMs != null ? (Math.round(a.lcpMs / 100) / 10).toFixed(1) : '';
-  const mb  = a.pageWeightKb != null ? (Math.round(a.pageWeightKb / 102.4) / 10).toFixed(1) : '';
-
-  const list = findings.length
-    ? `<ul style="margin:12px 0;padding-left:20px;">${findings
-      .map((f) => `<li style="margin:4px 0;">${esc(f.sentence)}</li>`).join('')}</ul>`
-    : '';
-
-  return String(template || '')
-    .replace(/\{\{\s*top_finding\s*\}\}/gi, esc(a.topFinding || findings[0]?.sentence || ''))
-    .replace(/\{\{\s*finding_2\s*\}\}/gi, esc(findings[1]?.sentence || ''))
-    .replace(/\{\{\s*finding_3\s*\}\}/gi, esc(findings[2]?.sentence || ''))
-    .replace(/\{\{\s*findings_list\s*\}\}/gi, list)
-    .replace(/\{\{\s*perf_score\s*\}\}/gi, a.perfMobile != null ? String(a.perfMobile) : '')
-    .replace(/\{\{\s*perf_desktop\s*\}\}/gi, a.perfDesktop != null ? String(a.perfDesktop) : '')
-    .replace(/\{\{\s*seo_score\s*\}\}/gi, a.seoScore != null ? String(a.seoScore) : '')
-    .replace(/\{\{\s*lcp_seconds\s*\}\}/gi, lcp)
-    .replace(/\{\{\s*page_weight_mb\s*\}\}/gi, mb)
-    .replace(/\{\{\s*website\s*\}\}/gi, esc(a.website || ''))
-    .replace(/\{\{\s*audit_tier\s*\}\}/gi, esc(a.tier || ''));
-}
-
-function renderMergeTags(template, lead, responseOptions) {
-  return renderAuditTags(String(template || ''), lead)
-    // businessName wins when present (B2B import format — see
-    // CampaignLead.businessName) so a template author writes {{first_name}}
-    // exactly once, phrases the greeting however fits both cases (e.g. "Hi
-    // team at {{first_name}}," reads correctly whether that resolves to a
-    // person's first name or a company name), and never needs to know or
-    // care which import format a given lead came from.
-    // esc()-wrapped: these arrive from imported CSVs and Google Sheets, so an
-    // ampersand or a stray tag in a business name would otherwise land raw in
-    // the email HTML.
-    .replace(/\{\{\s*first_?name\s*\}\}/gi, esc(lead.businessName || lead.firstName || 'there'))
-    .replace(/\{\{\s*last_?name\s*\}\}/gi, esc(lead.lastName || ''))
-    .replace(/\{\{\s*email\s*\}\}/gi, esc(lead.email || ''))
-    // Generic tracked-CTA redirect tag — lets a campaign's own template
-    // design any button wherever it wants (e.g. `<a href="{{redirect_url}}">
-    // Request a Call</a>`), not just this one "Request a Call" use case.
-    // Resolves to trackingController.requestCall, which logs the click,
-    // surfaces the lead into the pipeline as "Call Requested" (today's only
-    // use of this tag), then redirects to the campaign's configured
-    // destination (Settings tab → "Redirect URL"). `lead` here is the
-    // CampaignLead doc, so `.token` (used for open/click/unsubscribe
-    // tracking already) is available.
-    .replace(/\{\{\s*redirect_url\s*\}\}/gi, `${apiBase}/api/campaigns/track/call-request/${lead.token}`)
-    .replace(/\{\{\s*response_options\s*\}\}/gi, buildResponseOptionsHtml(responseOptions, lead.token));
-}
-
 // ── Tracking / unsubscribe injection ─────────────────────────────────────
 const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/$/, '');
 const apiBase   = process.env.CAMPAIGN_TRACK_BASE_URL
@@ -192,6 +109,9 @@ if (!process.env.CAMPAIGN_TRACK_BASE_URL && (!process.env.CLIENT_URL || apiBase.
   console.error(`   Fix: set CLIENT_URL in backend/.env to your public domain and restart this process.\n`);
   sysLog.error('CAMPAIGN', `CLIENT_URL not set for campaign-worker — outgoing links point at ${apiBase}`);
 }
+
+// Renderer is built once apiBase is known — see utils/campaignRender.js.
+const { renderMergeTags } = makeRenderer({ apiBase });
 
 function rewriteLinksForClickTracking(html, token) {
   return html.replace(/href="(https?:\/\/[^"]+)"/gi, (m, url) => {
@@ -222,23 +142,6 @@ function appendUnsubscribeFooter(html, token, account) {
     </p>`;
 }
 
-function stripToPlain(html) {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    // Stripping tags below would otherwise throw away every href along with
-    // its <a> tag, leaving only the visible link text — for text-only sends
-    // (settings.textOnly), this is the ONLY copy of the email that goes out,
-    // so a "click here" link would silently lose its URL entirely. Inline
-    // the URL next to the link text before the generic tag strip runs.
-    .replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, url, inner) => {
-      const label = inner.replace(/<[^>]+>/g, '').trim();
-      return label && label !== url ? `${label} (${url})` : url;
-    })
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
 
 const spamSafeHeaders = (account, unsubUrl) => ({
   'X-Priority':     '3',
@@ -277,6 +180,27 @@ const worker = new Worker('campaign-queue', async (job) => {
     return { skipped: true, reason: currentStatus };
   }
 
+  // A follow-up must also re-check the lead's MAIN status, not just its
+  // followUpStatus. Nothing that ends a conversation touches followUpStatus:
+  // replySync sets status 'replied', the unsubscribe handler sets
+  // 'unsubscribed', and a bounce sets 'bounced' — all leaving followUpStatus
+  // on 'queued'. So a lead who replied or unsubscribed in the window between
+  // the dispatcher queueing the job and the worker running it still received
+  // the follow-up. `lead` here was just loaded by id above, so this reads
+  // current state rather than the dispatcher's copy, and testing for 'sent'
+  // covers every one of those outcomes at once rather than listing them.
+  const followUpCheck = isFollowUp ? followUpStillValid(lead) : { send: true, reason: '' };
+  if (!followUpCheck.send) {
+    log(`Job ${job.id} — lead ${lead.email} status is "${lead.status}" (no longer just 'sent'), skipping follow-up`);
+    // Released rather than left on 'queued', so the lead isn't stuck
+    // mid-flight forever. The dispatcher's own query requires status 'sent',
+    // so it cannot be picked up again while it stays replied/unsubscribed.
+    lead.followUpStatus = 'none';
+    lead.followUpAccountUsed = null;
+    await lead.save();
+    return { skipped: true, reason: followUpCheck.reason };
+  }
+
   const campaign = await Campaign.findById(lead.campaign);
   if (!campaign) {
     if (isFollowUp) { lead.followUpStatus = 'failed'; lead.followUpError = 'Campaign not found'; }
@@ -301,7 +225,7 @@ const worker = new Worker('campaign-queue', async (job) => {
   if (isFollowUp) lead.followUpStatus = 'sending'; else lead.status = 'sending';
   await lead.save();
 
-  const subject = renderMergeTags(isFollowUp ? campaign.settings.followUpSubject : campaign.subject, lead, campaign.settings.responseOptions);
+  const subject = renderMergeTags(isFollowUp ? campaign.settings.followUpSubject : campaign.subject, lead, campaign.settings.responseOptions, 'header');
   let html = renderMergeTags(isFollowUp ? campaign.settings.followUpBodyHtml : campaign.bodyHtml, lead, campaign.settings.responseOptions);
   // Opt-out toggle, defaults true — see Campaign.js for why this isn't
   // off by default. `unsubUrl` stays null (not just an unused string) when

@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   ArrowLeft, Upload, FileSpreadsheet, Play, Pause, Download, XCircle, Flame,
   ShieldCheck, ShieldAlert, ShieldQuestion, ShieldOff, Check, X, Eye, Lock, Smartphone,
-  Gauge, FileText, Heading, BarChart3, Megaphone, Map, Rss, Mail as MailIcon, Star, Link2, Globe2, Send,
+  Gauge, FileText, Heading, BarChart3, Megaphone, Map, Rss, Mail as MailIcon, Star, Link2, Globe2, Send, Repeat,
 } from 'lucide-react';
 import useAppStore from '../store/useAppStore';
 import { Page, Button, Select, StatCard, EmptyState, Modal } from '../components/ui';
@@ -256,7 +256,7 @@ export default function ProspectAuditDetailPage() {
   const navigate = useNavigate();
   const {
     batches, prospects, loadBatch, loadProspects, importCsv, importSheet, startCrawl, pauseCrawl, deleteProspect,
-    campaigns, loadCampaigns, pushToCampaign,
+    campaigns, loadCampaigns, pushToCampaign, setAutoPush,
   } = useAppStore(useShallow((s) => ({
     batches: s.prospectAuditBatches,
     prospects: s.prospectAudits,
@@ -270,6 +270,7 @@ export default function ProspectAuditDetailPage() {
     campaigns: s.campaigns,
     loadCampaigns: s.loadCampaigns,
     pushToCampaign: s.pushProspectsToCampaign,
+    setAutoPush: s.setProspectAutoPush,
   })));
 
   const batch = batches.find((b) => b._id === id);
@@ -282,6 +283,11 @@ export default function ProspectAuditDetailPage() {
   const [pushCampaignId, setPushCampaignId] = useState('');
   const [pushTiers, setPushTiers] = useState(['hot', 'high']);
   const [pushing, setPushing] = useState(false);
+  const [showAuto, setShowAuto] = useState(false);
+  const [autoCampaignId, setAutoCampaignId] = useState('');
+  const [autoTiers, setAutoTiers] = useState(['hot', 'high']);
+  const [autoRequireFindings, setAutoRequireFindings] = useState(true);
+  const [savingAuto, setSavingAuto] = useState(false);
   // Store just the id, not the object — re-derived from the live `prospects`
   // list on every render, so the modal reflects a re-crawl or refresh
   // instead of showing a frozen snapshot from the moment it was opened.
@@ -379,6 +385,19 @@ export default function ProspectAuditDetailPage() {
               : 'No audited prospects with an email address and findings yet'}
           >
             <Send size={14} /> Push to Campaign
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              loadCampaigns();
+              setAutoCampaignId(batch.autoPushCampaign ? String(batch.autoPushCampaign) : '');
+              setAutoTiers(batch.autoPushTiers?.length ? batch.autoPushTiers : ['hot', 'high']);
+              setAutoRequireFindings(batch.autoPushRequireFindings !== false);
+              setShowAuto(true);
+            }}
+            title="Optionally push this batch into a campaign automatically when the crawl finishes"
+          >
+            <Repeat size={14} /> Auto-push: {batch.autoPushEnabled ? 'On' : 'Off'}
           </Button>
           <Button
             variant="outline"
@@ -589,6 +608,86 @@ export default function ProspectAuditDetailPage() {
             >
               <Send size={14} /> {pushing ? 'Adding…' : `Add ${pushSelectedCount} lead${pushSelectedCount === 1 ? '' : 's'}`}
             </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={showAuto} onClose={() => setShowAuto(false)} title="Auto-push when this batch finishes crawling">
+        <div className="px-6 py-5 space-y-4">
+          <p className="text-[13px] text-slate-500 dark:text-slate-400">
+            Optional. Leave this off and nothing changes — you crawl, review the tiers, press
+            <strong> Push to Campaign</strong>, then press <strong>Start</strong> as usual.
+            Switched on, the audited prospects are added to a campaign the moment the crawl finishes.
+            The campaign is <strong>never started automatically</strong>: it stays a draft until you press Start.
+          </p>
+
+          {batch.autoPushResult?.status && (
+            <div className="text-[12.5px] rounded-lg px-3 py-2 bg-slate-50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-300">
+              <strong>Last run:</strong>{' '}
+              {batch.autoPushResult.status === 'pushed'
+                ? `added ${batch.autoPushResult.created} lead(s) to "${batch.autoPushResult.campaignName}"`
+                  + ` — of ${batch.autoPushResult.totalInBatch ?? '?'} in the batch,`
+                  + ` ${batch.autoPushResult.skippedNotEligible ?? 0} not audited/no email,`
+                  + ` ${batch.autoPushResult.skippedDuplicate ?? 0} already in the campaign`
+                : `${batch.autoPushResult.status} — ${batch.autoPushResult.reason}`}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Campaign to fill</label>
+            <Select value={autoCampaignId} onChange={(e) => setAutoCampaignId(e.target.value)}>
+              <option value="">Select a draft or paused campaign…</option>
+              {campaigns.filter((c) => ['draft', 'paused'].includes(c.status))
+                .map((c) => <option key={c._id} value={c._id}>{c.name} ({c.status})</option>)}
+            </Select>
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Tiers to include</label>
+            <div className="flex flex-wrap gap-2">
+              {['hot', 'high', 'medium', 'low'].map((tr) => (
+                <button key={tr} type="button"
+                  onClick={() => setAutoTiers((prev) => prev.includes(tr) ? prev.filter((x) => x !== tr) : [...prev, tr])}
+                  className={cn('px-2.5 py-1 rounded-full text-[12px] font-semibold border transition-colors',
+                    autoTiers.includes(tr) ? 'bg-primary-600 text-white border-primary-600'
+                      : 'border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300')}>
+                  {TIER_BADGE[tr]?.label || tr}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-[13px] text-slate-600 dark:text-slate-300">
+            <input type="checkbox" checked={autoRequireFindings} onChange={(e) => setAutoRequireFindings(e.target.checked)} />
+            Only push prospects that have at least one audit finding
+          </label>
+
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <div>
+              {batch.autoPushEnabled && (
+                <Button variant="outline" disabled={savingAuto}
+                  onClick={async () => {
+                    setSavingAuto(true);
+                    try { await setAutoPush(id, { enabled: false }); setShowAuto(false); }
+                    catch { /* store surfaced it */ } finally { setSavingAuto(false); }
+                  }}>
+                  Turn off
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => setShowAuto(false)}>Cancel</Button>
+              <Button disabled={!autoCampaignId || savingAuto}
+                onClick={async () => {
+                  setSavingAuto(true);
+                  try {
+                    await setAutoPush(id, { enabled: true, campaignId: autoCampaignId, tiers: autoTiers, requireFindings: autoRequireFindings });
+                    setShowAuto(false);
+                  } catch { /* store surfaced it */ } finally { setSavingAuto(false); }
+                }}>
+                <Repeat size={14} /> {savingAuto ? 'Saving…' : 'Enable auto-push'}
+              </Button>
+            </div>
           </div>
         </div>
       </Modal>

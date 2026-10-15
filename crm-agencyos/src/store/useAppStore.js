@@ -1276,6 +1276,22 @@ const useAppStore = create((set, get, store) => ({
     }
   },
 
+  // Turn the optional batch-complete auto-push on or off. Nothing else in the
+  // prospect/campaign flow changes when this is left alone.
+  setProspectAutoPush: async (batchId, body) => {
+    try {
+      const { data } = await prospectAuditsAPI.setAutoPush(batchId, body);
+      set((s) => ({
+        prospectAuditBatches: s.prospectAuditBatches.map((b) => (sameId(b, batchId) ? data.data : b)),
+      }));
+      toast.success(body.enabled === false ? 'Auto-push turned off' : 'Auto-push enabled for this batch');
+      return data.data;
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save auto-push settings');
+      throw err;
+    }
+  },
+
   importProspectAuditsSheet: async (batchId, googleSheetUrl) => {
     try {
       const { data } = await prospectAuditsAPI.importSheet(batchId, googleSheetUrl);

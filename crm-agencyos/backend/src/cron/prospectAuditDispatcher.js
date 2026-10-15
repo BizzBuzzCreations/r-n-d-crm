@@ -21,11 +21,18 @@ const ProspectAuditBatch = require('../models/ProspectAuditBatch');
 const ProspectAudit = require('../models/ProspectAudit');
 const { SystemSettings } = require('../models/index');
 const { addProspectAuditToQueue } = require('../queues/prospectAuditQueue');
+const { autoPushCompletedBatch } = require('../services/prospectPushService');
 
 let sysLog = { info: () => {}, warn: () => {}, error: () => {} };
 try { sysLog = require('../utils/sysLogger').logger; } catch {}
 
-const RELEASES_PER_TICK = 50; // 50/60s ≈ 0.83 req/sec — safely under PSI's ~1/sec recommendation
+// Each prospect now costs up to TWO PSI calls (mobile always, desktop only
+// when the mobile score is low enough for a gap to exist — see
+// runTier2Desktop). Pacing and the daily budget are both charged at the
+// worst case: overshooting Google's hard 25k/day cap stalls a crawl outright,
+// while under-using it only means a slightly longer run.
+const PSI_CALLS_PER_PROSPECT = 2;
+const RELEASES_PER_TICK = 30; // 30 prospects/60s × 2 calls = 1 req/sec worst case
 const DAILY_CAP_PER_KEY = 25000;
 
 function startProspectAuditDispatcher() {
@@ -104,7 +111,7 @@ async function runProspectAuditTick() {
 
       try {
         await addProspectAuditToQueue(prospect._id, key);
-        recordUsage(key, 1);
+        recordUsage(key, PSI_CALLS_PER_PROSPECT);
         released++;
       } catch (queueErr) {
         // Enqueueing failed (e.g. a Redis blip) — revert instead of leaving
@@ -135,8 +142,18 @@ async function autoCompleteFinishedBatches() {
     const remaining = await ProspectAudit.countDocuments({ batch: batch._id, crawlStatus: { $in: ['pending', 'crawling'] } });
     if (remaining === 0) {
       await ProspectAuditBatch.updateOne({ _id: batch._id }, { status: 'completed' });
+      // Opt-in only. A batch nobody configured falls straight through here and
+      // the flow is exactly what it was: crawl, review, press the button.
+      await autoPushCompletedBatch(batch).catch((e) => {
+        // Belt and braces — autoPushCompletedBatch already records its own
+        // failures. An exception escaping here would abandon the remaining
+        // batches in this tick, so it is swallowed deliberately.
+        console.error(`[ProspectAuditDispatcher] auto-push ${batch._id} threw:`, e.message);
+        sysLog.error('PROSPECT_AUDIT', `Auto-push threw for batch ${batch._id}: ${e.message}`);
+      });
     }
   }
 }
+
 
 module.exports = { startProspectAuditDispatcher, runProspectAuditTick };

@@ -113,6 +113,27 @@ exports.updateCampaign = async (req, res, next) => {
       campaign.settings = { ...campaign.settings.toObject(), ...settings };
     }
 
+    // The audit-data gate in checkCampaignReady only runs on start/schedule,
+    // which left three ways to defeat it entirely on a campaign that is
+    // ALREADY running: edit the body to add {{top_finding}}, switch
+    // followUpEnabled on so a follow-up body full of audit tags becomes live,
+    // or import fresh leads with no snapshot. The first two land here, so
+    // re-check before saving and refuse rather than let a live campaign start
+    // rendering tags its leads cannot fill.
+    //
+    // Only enforced while the campaign can actually send — a draft/paused
+    // campaign is still being written, and blocking edits there would make
+    // the editor unusable (the gate runs again on start).
+    if (['active', 'scheduled'].includes(campaign.status)) {
+      const gate = await checkCampaignReady(campaign);
+      if (!gate.ready) {
+        return res.status(400).json({
+          success: false,
+          message: `This change can't be saved while the campaign is ${campaign.status}: ${gate.reason}`,
+        });
+      }
+    }
+
     await campaign.save();
     audit.log(req, { action: 'update', category: 'campaign', targetId: campaign._id, targetModel: 'Campaign', targetTitle: campaign.name });
 

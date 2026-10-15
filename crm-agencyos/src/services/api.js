@@ -473,6 +473,10 @@ export const prospectAuditsAPI = {
   // an audit snapshot the campaign's merge tags can quote. Requires both the
   // prospect_audit and campaigns features.
   pushToCampaign: (id, body) => api.post(`/prospect-audits/${id}/push-to-campaign`, body),
+
+  // Optional automation: push this batch into a campaign automatically when it
+  // finishes crawling. Off unless switched on; pass { enabled: false } to stop.
+  setAutoPush: (id, body) => api.put(`/prospect-audits/${id}/auto-push`, body),
 };
 
 // ─────────────────────────────────────────────────────────────

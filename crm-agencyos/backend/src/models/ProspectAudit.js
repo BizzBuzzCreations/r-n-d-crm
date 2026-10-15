@@ -70,6 +70,12 @@ const ProspectAuditSchema = new mongoose.Schema({
 
   // ── Tier 2 — PageSpeed Insights findings ───────────────────────────────
   psiPerformanceScore:    { type: Number, default: null },
+  // Second PSI pass, desktop strategy. Only populated when the mobile score
+  // is below DESKTOP_PSI_MOBILE_CEILING (see prospectAuditWorker) — a second
+  // API call per prospect is not worth spending where no gap can exist.
+  psiPerformanceScoreDesktop: { type: Number, default: null },
+  // Total page transfer size from Lighthouse's total-byte-weight audit.
+  pageWeightKb:           { type: Number, default: null },
   psiSeoScore:            { type: Number, default: null },
   psiAccessibilityScore:  { type: Number, default: null },
   psiBestPracticesScore:  { type: Number, default: null },

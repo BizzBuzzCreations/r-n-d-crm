@@ -407,6 +407,12 @@ prospectAuditsRouter.delete('/:id/prospects/:prospectId',  prospectAuditCtrl.del
 prospectAuditsRouter.post('/:id/push-to-campaign',
   authorizeFeature('campaigns', ['admin', 'manager']),
   prospectAuditCtrl.pushToCampaign);
+// Same double gate: configuring the optional auto-push grants a cron the
+// authority to create campaign leads later, so it needs campaigns access too,
+// and the caller is recorded as the authority that push runs under.
+prospectAuditsRouter.put('/:id/auto-push',
+  authorizeFeature('campaigns', ['admin', 'manager']),
+  prospectAuditCtrl.setAutoPush);
 prospectAuditsRouter.post('/:id/start',                    prospectAuditCtrl.startCrawl);
 prospectAuditsRouter.post('/:id/pause',                    prospectAuditCtrl.pauseCrawl);
 module.exports.prospectAudits = prospectAuditsRouter;

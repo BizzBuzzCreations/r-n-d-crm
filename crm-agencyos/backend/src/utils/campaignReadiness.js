@@ -1,6 +1,6 @@
 'use strict';
 const CampaignLead = require('../models/CampaignLead');
-const { usesAuditTags } = require('./auditMergeTags');
+const { auditTagsUsed, missingAuditDataFilter } = require('./auditMergeTags');
 
 // Single source of truth for "is this campaign actually sendable right now" —
 // used by the manual Start button, the Schedule action, and the scheduled-
@@ -20,28 +20,32 @@ async function checkCampaignReady(campaign) {
   }
 
   // A body (or follow-up body) that quotes website-audit facts is only
-  // sendable to leads that actually carry an audit snapshot. Without this
-  // check those tags render empty and the recipient gets a sentence with a
-  // hole in it — the kind of mistake that costs far more than a paused
-  // campaign. Blocks on the first pending lead missing a snapshot.
-  const needsAudit = usesAuditTags(campaign.bodyHtml) || usesAuditTags(campaign.subject)
-    || (campaign.settings?.followUpEnabled
-      && (usesAuditTags(campaign.settings.followUpBodyHtml) || usesAuditTags(campaign.settings.followUpSubject)));
+  // sendable to leads whose snapshot can actually fill the tags it uses.
+  //
+  // This checks each tag against the field it reads, rather than just asking
+  // "does a snapshot exist". The earlier version tested prospectId and
+  // topFinding only, which a prospect whose PageSpeed pass failed passes
+  // happily — Tier 1 still produced a topFinding, while perfMobile, lcpMs and
+  // pageWeightKb are all null. A template using {{perf_score}} then rendered
+  // "Google scores it /100 on mobile" and sent it.
+  const templates = [campaign.subject, campaign.bodyHtml];
+  if (campaign.settings?.followUpEnabled) {
+    templates.push(campaign.settings.followUpSubject, campaign.settings.followUpBodyHtml);
+  }
 
-  if (needsAudit) {
+  const missingFilter = missingAuditDataFilter(templates);
+  if (missingFilter) {
     const missing = await CampaignLead.countDocuments({
       campaign: campaign._id,
       status: 'pending',
-      $or: [
-        { 'auditSnapshot.prospectId': null },
-        { 'auditSnapshot.prospectId': { $exists: false } },
-        { 'auditSnapshot.topFinding': '' },
-      ],
+      ...missingFilter,
     });
     if (missing > 0) {
+      const tags = auditTagsUsed(templates).map((t) => `{{${t}}}`).join(', ');
       return {
         ready: false,
-        reason: `${missing} of ${pendingCount} pending leads have no website-audit data, but this email uses audit merge tags (e.g. {{top_finding}}). Push leads in from a Prospect Audit batch, or remove those tags.`,
+        reason: `${missing} of ${pendingCount} pending leads are missing the website-audit data this email needs (${tags}). `
+          + `Push leads in from a Prospect Audit batch, re-crawl the ones whose PageSpeed pass failed, or remove those tags.`,
       };
     }
   }

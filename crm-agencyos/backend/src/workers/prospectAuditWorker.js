@@ -83,7 +83,13 @@ const CMS_SIGNATURES = [
   { pattern: /squarespace/i, name: 'Squarespace' },
   { pattern: /webflow/i, name: 'Webflow' },
 ];
-const ANALYTICS_SIGNATURES = /googletagmanager\.com|google-analytics\.com|gtag\(|analytics\.js/i;
+// Google's own tags plus the privacy-focused and product analytics tools that
+// are common on SMB sites. Detecting only GA/GTM meant a site running
+// Plausible or Matomo read as "no analytics" — which fed the technical score,
+// the opportunity score AND an outgoing claim in the ads_without_analytics
+// finding. Under-detection here is not a neutral default; it manufactures a
+// false statement about the recipient's own site.
+const ANALYTICS_SIGNATURES = /googletagmanager\.com|google-analytics\.com|gtag\(|analytics\.js|plausible\.io|usefathom\.com|matomo|piwik|clarity\.ms|segment\.(com|io)|hotjar|mixpanel|heap(analytics)?\.com|statcounter|cloudflareinsights\.com|umami|js\.hs-scripts\.com/i;
 const ADS_PIXEL_SIGNATURES = /googleadservices\.com|google_conversion|connect\.facebook\.net|fbevents\.js|fbq\(/i;
 
 async function fetchWithTimeout(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
@@ -137,6 +143,34 @@ async function countBrokenLinks(baseUrl, links) {
     }
   }
   return broken;
+}
+
+// Collect every @type in a JSON-LD document, however it's nested.
+//
+// Reading `@type` off the top-level object only was wrong for the most common
+// shape in the wild: Yoast (and most WordPress SEO plugins) emit
+// `{"@context":…, "@graph":[{"@type":"LocalBusiness"},…]}` — no top-level
+// @type at all. That made structuredDataTypes come back empty for a large
+// share of real sites, and the no_local_schema finding then told those
+// businesses their site "has no business markup" when it plainly did. A
+// finding that goes out in a cold email has to be wrong far less often than
+// that, so this walks arrays, @graph, and nested entity values alike.
+const LD_MAX_DEPTH = 6;
+function collectLdTypes(node, out, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > LD_MAX_DEPTH) return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectLdTypes(item, out, depth + 1);
+    return;
+  }
+  const type = node['@type'];
+  if (type) out.push(...(Array.isArray(type) ? type : [type]).filter((t) => typeof t === 'string'));
+  // @graph is the usual container, but entities also nest under plain keys
+  // (e.g. publisher, parentOrganization, mainEntity) — walk those too rather
+  // than special-casing one key and missing the next plugin's layout.
+  for (const [key, value] of Object.entries(node)) {
+    if (key === '@type' || key === '@context') continue;
+    if (value && typeof value === 'object') collectLdTypes(value, out, depth + 1);
+  }
 }
 
 async function runTier1(website) {
@@ -226,12 +260,7 @@ async function runTier1(website) {
   const structuredDataTypes = [];
   for (const el of structuredDataScripts) {
     try {
-      const parsed = JSON.parse($(el).html() || '{}');
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      for (const item of items) {
-        const type = item?.['@type'];
-        if (type) structuredDataTypes.push(...(Array.isArray(type) ? type : [type]));
-      }
+      collectLdTypes(JSON.parse($(el).html() || '{}'), structuredDataTypes);
     } catch { /* malformed JSON-LD — skip rather than fail the whole crawl over it */ }
   }
 
@@ -262,8 +291,11 @@ async function runTier1(website) {
   };
 }
 
-async function runTier2(website, apiKey) {
-  const url = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(website)}&key=${encodeURIComponent(apiKey)}&category=performance&category=seo&category=accessibility&category=best-practices&strategy=mobile`;
+// One PSI round-trip for a given strategy, with the retry/timeout policy
+// below. Split out of runTier2 so the desktop pass can reuse it without
+// duplicating the error handling.
+async function fetchPsi(website, apiKey, strategy) {
+  const url = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(website)}&key=${encodeURIComponent(apiKey)}&category=performance&category=seo&category=accessibility&category=best-practices&strategy=${strategy}`;
 
   // PSI is independently flaky (transient 429/500s, Lighthouse timing out on
   // the target site) and a single failure used to mean no performance data at
@@ -284,8 +316,11 @@ async function runTier2(website, apiKey) {
     if (attempt < PSI_ATTEMPTS) await new Promise((r) => setTimeout(r, 3000));
   }
   if (!res) throw lastErr || new Error('PSI failed');
+  return res.json();
+}
 
-  const data = await res.json();
+async function runTier2(website, apiKey) {
+  const data = await fetchPsi(website, apiKey, 'mobile');
   const categories = data?.lighthouseResult?.categories || {};
   const audits = data?.lighthouseResult?.audits || {};
   const pct = (v) => (v?.score != null ? Math.round(v.score * 100) : null);
@@ -312,10 +347,33 @@ async function runTier2(website, apiKey) {
       inp: audits['experimental-interaction-to-next-paint']?.numericValue ?? null,
     },
     tti: audits['interactive']?.numericValue ?? null,
+    // Total transfer size of the page, which Lighthouse already measures on
+    // the run we just paid for. This was referenced by the heavy_page finding
+    // and the {{page_weight_mb}} merge tag but never actually written by
+    // anything — so the finding could not fire and the tag rendered empty
+    // into live email copy.
+    pageWeightKb: audits['total-byte-weight']?.numericValue != null
+      ? Math.round(audits['total-byte-weight'].numericValue / 1024)
+      : null,
     psiFailedAudits: failedAudits,
     psiStatus: 'ok',
     psiError: '',
   };
+}
+
+// Desktop is a SECOND PSI call, so it is gated rather than unconditional:
+// the only thing that reads it is the mobile_desktop_gap finding, which needs
+// desktop - mobile >= 25. A site already scoring well on mobile cannot
+// produce a meaningful gap, so spending a second call (and half the crawl
+// throughput) on it buys nothing. Runs only for the slow-mobile population
+// where the comparison is the actual pitch.
+const DESKTOP_PSI_MOBILE_CEILING = 70;
+
+async function runTier2Desktop(website, apiKey) {
+  const data = await fetchPsi(website, apiKey, 'desktop');
+  const categories = data?.lighthouseResult?.categories || {};
+  const score = categories.performance?.score;
+  return { psiPerformanceScoreDesktop: score != null ? Math.round(score * 100) : null };
 }
 
 async function getPsiKey(psiKeyLabel) {
@@ -345,6 +403,18 @@ const worker = new Worker('prospect-audit-queue', async (job) => {
       const apiKey = await getPsiKey(psiKeyLabel);
       if (apiKey) {
         tier2 = await runTier2(prospect.website, apiKey);
+
+        // Best-effort second pass. A desktop failure must never cost us the
+        // mobile data we already have, so it is caught separately: the gap
+        // finding simply doesn't fire, which is the correct outcome when the
+        // comparison wasn't measured.
+        if (tier2.psiPerformanceScore != null && tier2.psiPerformanceScore < DESKTOP_PSI_MOBILE_CEILING) {
+          try {
+            Object.assign(tier2, await runTier2Desktop(prospect.website, apiKey));
+          } catch (deskErr) {
+            err(`PSI desktop pass failed for ${prospect.website}: ${deskErr.message}`);
+          }
+        }
       } else {
         tier2 = { psiStatus: 'skipped', psiError: 'No PageSpeed Insights API key configured' };
       }

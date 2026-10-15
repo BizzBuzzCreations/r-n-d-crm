@@ -34,9 +34,17 @@ const FINDINGS = [
     angle: 'wasted_ad_spend',
     severity: 5,
     pitchValue: 10,
-    title: 'Paid ads pointing at a slow page',
+    title: 'Ad tracking pointing at a slow page',
     applies: (a) => a.hasAdsPixel && a.psiPerformanceScore != null && a.psiPerformanceScore < 50,
-    sentence: (a) => `You're running paid ads to a homepage Google scores ${a.psiPerformanceScore}/100 on mobile — most of that click spend leaves before the page finishes loading.`,
+    // What is actually measured is an ad conversion/pixel tag in the page
+    // source — NOT that money is being spent today. A pixel outlives the
+    // campaign that installed it, so "you're running paid ads" was a claim
+    // about the recipient's budget drawn from a script tag. This is the
+    // highest-ranked finding, so it becomes {{top_finding}} whenever it
+    // fires: it is the single sentence most worth keeping honest. Phrased so
+    // it still lands if they are spending, and is simply not wrong if they
+    // stopped last year.
+    sentence: (a) => `Your site has ad conversion tracking installed, but Google scores the homepage ${a.psiPerformanceScore}/100 for speed on mobile — any paid traffic you send here is largely leaving before the page finishes loading.`,
   },
   {
     code: 'noindex',
@@ -61,9 +69,14 @@ const FINDINGS = [
     angle: 'flying_blind',
     severity: 4,
     pitchValue: 9,
-    title: 'Ad spend with no analytics',
+    title: 'Ad tracking with no analytics',
     applies: (a) => a.hasAdsPixel && !a.hasAnalytics,
-    sentence: () => `You have ad tracking on the site but no analytics installed, so there's no way to see which clicks actually turn into enquiries.`,
+    // Scoped to the tools ANALYTICS_SIGNATURES actually detects. The flat
+    // claim "no analytics installed" was wrong for every site running
+    // Plausible, Fathom, Matomo, Clarity or similar — and telling a business
+    // it has no analytics when it is looking at a dashboard ends the
+    // conversation on the spot.
+    sentence: () => `Your site has ad conversion tracking but no Google Analytics or Tag Manager alongside it, so there's no straightforward way to see which of those clicks turn into enquiries.`,
   },
   {
     code: 'mobile_desktop_gap',
