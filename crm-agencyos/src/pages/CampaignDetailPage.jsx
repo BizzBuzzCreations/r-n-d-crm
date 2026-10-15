@@ -55,6 +55,15 @@ const TABS = [
 ];
 
 // Hover tooltip on the Opens count — newest first, last 50 kept server-side
+// Same OR as the backend: qualified opens, or the legacy raw-open rule for
+// leads that predate humanOpenCount.
+//
+// MODULE scope, deliberately: renderLeadCell is a module-level function and
+// calls this. It used to live inside LeadsTab, which meant the Opens cell
+// threw a ReferenceError the moment the table rendered — and with no error
+// boundary above it, that blanked the entire campaign page.
+const isHotLead = (l) => (l.humanOpenCount || 0) >= HOT_OPEN_THRESHOLD || (l.openCount || 0) >= 3;
+
 function formatOpenHistory(lead) {
   if (!lead.openCount) return 'Not opened yet';
   const events = lead.opens?.length ? [...lead.opens].reverse() : null;
@@ -912,9 +921,6 @@ function LeadsTab({
   const sentLeads = leads.filter((l) => l.status === 'sent');
   const pendingLeads = leads.filter((l) => l.status === 'pending');
   const sentOrPendingLeads = leads.filter((l) => l.status === 'sent' || l.status === 'pending');
-  // Same OR as the backend: qualified opens, or the legacy raw-open rule for
-  // leads that predate humanOpenCount.
-  const isHotLead = (l) => (l.humanOpenCount || 0) >= HOT_OPEN_THRESHOLD || (l.openCount || 0) >= 3;
   const hotLeads = leads.filter(isHotLead);
   const callRequestedLeads = leads.filter((l) => l.callRequested);
 
