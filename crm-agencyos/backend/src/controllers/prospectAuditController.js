@@ -78,9 +78,15 @@ function normalizeHeader(h) { return String(h || '').trim().toLowerCase(); }
 
 function mapRow(row) {
   const keys = Object.keys(row);
+  // Aliases tried IN ORDER so the list expresses priority — identical
+  // behaviour to campaignController's mapRow, deliberately, so the same CSV
+  // resolves the same way whichever importer reads it.
   const find = (aliases) => {
-    const key = keys.find((k) => aliases.includes(normalizeHeader(k)));
-    return key ? String(row[key] ?? '').trim() : '';
+    for (const alias of aliases) {
+      const key = keys.find((k) => normalizeHeader(k) === alias);
+      if (key) return String(row[key] ?? '').trim();
+    }
+    return '';
   };
   const ratingRaw = find(HEADER_ALIASES.rating);
   const reviewsRaw = find(HEADER_ALIASES.reviewsCount);
