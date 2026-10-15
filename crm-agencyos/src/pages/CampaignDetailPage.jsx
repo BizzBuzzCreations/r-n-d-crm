@@ -756,6 +756,141 @@ const ADD_MODES = [
   { value: 'update-phones', label: 'Update Phones', icon: Phone },
 ];
 
+// One cell's contents. Split out of the table so the markup for a column
+// lives in exactly one place regardless of whether that column is visible.
+function renderLeadCell(key, l, { badge, vBadge }) {
+  const dash = <span className="text-slate-300 dark:text-slate-700">—</span>;
+  switch (key) {
+    case 'email':    return <span className="text-slate-800 dark:text-slate-200">{l.email}</span>;
+    case 'phone':    return <span className="text-slate-600 dark:text-slate-400">{l.phone || '—'}</span>;
+    case 'name':     return <span className="text-slate-600 dark:text-slate-400">{l.businessName || l.firstName || '—'}</span>;
+    case 'lastName': return <span className="text-slate-600 dark:text-slate-400">{l.lastName || '—'}</span>;
+
+    // The reason this column exists: before pressing Start you can see which
+    // leads carry website-audit data and which do not. A lead with no
+    // snapshot is the one that will block a template using audit merge tags,
+    // and it is otherwise indistinguishable from the rest.
+    case 'audit': {
+      const a = l.auditSnapshot;
+      if (!a || !a.prospectId) return dash;
+      const tier = TIER_BADGE_SMALL[a.tier] || null;
+      const detail = [
+        a.topFinding || '',
+        a.perfMobile != null ? `Mobile speed ${a.perfMobile}/100` : '',
+        a.seoScore != null ? `SEO ${a.seoScore}/100` : '',
+        a.lcpMs != null ? `Loads main content in ${(Math.round(a.lcpMs / 100) / 10).toFixed(1)}s` : '',
+        a.website || '',
+      ].filter(Boolean).join('\n');
+      return (
+        <span title={detail} className="inline-flex items-center gap-1.5 cursor-help">
+          {tier && <span className={cn('badge', tier.tw)}>{tier.label}</span>}
+          {a.perfMobile != null
+            ? <span className={cn('text-[12px] font-medium', a.perfMobile < 50 ? 'text-red-600 dark:text-red-400' : 'text-slate-500')}>{a.perfMobile}/100</span>
+            : <span className="text-[12px] text-amber-600 dark:text-amber-400">no speed data</span>}
+        </span>
+      );
+    }
+
+    case 'verification': return (
+      <span title={l.verificationDetail || vBadge.label} className={cn('inline-flex items-center gap-1 font-medium', vBadge.tw)}>
+        <vBadge.icon size={13} /> {vBadge.label}
+      </span>
+    );
+    case 'provider': return <span className="text-slate-600 dark:text-slate-400">{l.provider || '—'}</span>;
+    case 'status': return (
+      <>
+        <span className={cn('badge', badge.tw)}>{badge.label}</span>
+        {l.error && <span title={l.error}><AlertTriangle size={12} className="inline ml-1.5 text-red-400" /></span>}
+      </>
+    );
+    case 'opens': return (
+      <span
+        title={formatOpenHistory(l) + (isHotLead(l) ? `\n🔥 Hot lead — ${HOT_OPEN_THRESHOLD}+ real opens` : '')}
+        className={cn('inline-flex items-center gap-1 text-slate-600 dark:text-slate-400', l.openCount ? 'underline decoration-dotted cursor-help' : '')}
+      >
+        {l.openCount || 0}
+        {isHotLead(l) && <Flame size={12} className="text-orange-500" />}
+      </span>
+    );
+    case 'lastOpened': return <span className="text-slate-500 dark:text-slate-400">{l.openedAt ? new Date(l.openedAt).toLocaleString() : '—'}</span>;
+    case 'clicks': return <span className="text-slate-600 dark:text-slate-400">{l.clickCount || 0}</span>;
+    case 'callReq': return l.callRequested ? (
+      <span
+        title={l.callRequestedAt ? `Requested a call — ${new Date(l.callRequestedAt).toLocaleString()}` : 'Requested a call'}
+        className="inline-flex items-center text-blue-600 dark:text-blue-400 cursor-help"
+      >
+        <PhoneCall size={13} />
+      </span>
+    ) : dash;
+    case 'response': return l.responseOption ? (
+      <span
+        title={l.respondedAt ? `${l.responseOption} — ${new Date(l.respondedAt).toLocaleString()}` : l.responseOption}
+        className="inline-flex items-center gap-1 text-[12px] font-medium text-purple-600 dark:text-purple-400 cursor-help"
+      >
+        <MessageSquareText size={12} /> {l.responseOption}
+      </span>
+    ) : dash;
+    case 'sent': return <span className="text-slate-500 dark:text-slate-400">{l.sentAt ? new Date(l.sentAt).toLocaleDateString() : '—'}</span>;
+    case 'followUp': return FOLLOW_UP_BADGE[l.followUpStatus] || null;
+    default: return null;
+  }
+}
+
+// Compact tier badges for the Audit cell — the prospect-audit page has its own
+// fuller set; these are sized for a dense table row.
+const TIER_BADGE_SMALL = {
+  hot:     { label: 'Hot',    tw: 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300' },
+  high:    { label: 'High',   tw: 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400' },
+  medium:  { label: 'Medium', tw: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400' },
+  low:     { label: 'Low',    tw: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
+  skip:    { label: 'Skip',   tw: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400' },
+  no_site: { label: 'No Site', tw: 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-500' },
+};
+
+// ── Leads table columns ───────────────────────────────────────────────────
+// ONE definition list drives both the header and the body, so a column can
+// never appear in one and not the other. Visibility is per-campaign
+// (settings.leadColumns); a campaign that has never been configured shows
+// DEFAULT_LEAD_COLUMNS, which is exactly what the table showed before this
+// was configurable.
+//
+// `always: true` means the column cannot be hidden — email identifies the row
+// and status is the thing the whole page is about, so hiding either would
+// leave a table nobody can read.
+const LEAD_COLUMN_DEFS = [
+  { key: 'email',        label: 'Email',        always: true },
+  { key: 'phone',        label: 'Phone' },
+  { key: 'name',         label: 'Name' },
+  { key: 'lastName',     label: 'Last Name' },
+  { key: 'audit',        label: 'Audit' },
+  { key: 'verification', label: 'Verification' },
+  { key: 'provider',     label: 'Provider' },
+  { key: 'status',       label: 'Status',       always: true },
+  { key: 'opens',        label: 'Opens',        align: 'center' },
+  { key: 'lastOpened',   label: 'Last Opened' },
+  { key: 'clicks',       label: 'Clicks',       align: 'center' },
+  { key: 'callReq',      label: 'Call Req.',    align: 'center' },
+  { key: 'response',     label: 'Response' },
+  { key: 'sent',         label: 'Sent' },
+  { key: 'followUp',     label: 'Follow-up' },
+];
+
+// What a campaign shows when nobody has configured it — every column the
+// table had before, plus Audit. Keeping Audit on by default means a pushed
+// batch is legible immediately; a plain mail-merge campaign can switch it off
+// in Settings, which is the whole point of making this configurable.
+const DEFAULT_LEAD_COLUMNS = LEAD_COLUMN_DEFS.map((c) => c.key);
+
+// Resolve a campaign's saved preference into the set actually rendered.
+// Unknown keys (a column removed in a later version) are ignored rather than
+// crashing, and `always` columns are forced back in even if a stale saved
+// list omits them.
+function visibleLeadColumns(campaign) {
+  const saved = campaign?.settings?.leadColumns;
+  const chosen = Array.isArray(saved) && saved.length ? saved : DEFAULT_LEAD_COLUMNS;
+  return LEAD_COLUMN_DEFS.filter((c) => c.always || chosen.includes(c.key));
+}
+
 function LeadsTab({
   campaign, leads, importing, fileInputRef, onFileSelected, onImportSheet, onAddManual, onDeleteLead, onMarkReplied, onVerifyLead, onVerifyAll,
   phoneFileInputRef, onPhoneFileSelected, updatingPhones,
@@ -770,6 +905,7 @@ function LeadsTab({
   const [sheetUrl, setSheetUrl] = useState('');
   const [importingSheet, setImportingSheet] = useState(false);
   const [verifyingId, setVerifyingId] = useState(null);
+  const cols = visibleLeadColumns(campaign);
   const [verifyingAll, setVerifyingAll] = useState(false);
 
   const unverifiedCount = leads.filter((l) => l.verificationStatus === 'unverified').length;
@@ -1048,20 +1184,9 @@ function LeadsTab({
               <table className="w-full text-[13px]">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-700 text-left text-slate-500 dark:text-slate-400">
-                    <th className="px-4 py-2.5 font-medium">Email</th>
-                    <th className="px-4 py-2.5 font-medium">Phone</th>
-                    <th className="px-4 py-2.5 font-medium">Name</th>
-                    <th className="px-4 py-2.5 font-medium">Last Name</th>
-                    <th className="px-4 py-2.5 font-medium">Verification</th>
-                    <th className="px-4 py-2.5 font-medium">Provider</th>
-                    <th className="px-4 py-2.5 font-medium">Status</th>
-                    <th className="px-4 py-2.5 font-medium text-center">Opens</th>
-                    <th className="px-4 py-2.5 font-medium">Last Opened</th>
-                    <th className="px-4 py-2.5 font-medium text-center">Clicks</th>
-                    <th className="px-4 py-2.5 font-medium text-center">Call Req.</th>
-                    <th className="px-4 py-2.5 font-medium">Response</th>
-                    <th className="px-4 py-2.5 font-medium">Sent</th>
-                    <th className="px-4 py-2.5 font-medium">Follow-up</th>
+                    {cols.map((c) => (
+                      <th key={c.key} className={cn('px-4 py-2.5 font-medium', c.align === 'center' && 'text-center')}>{c.label}</th>
+                    ))}
                     <th className="px-4 py-2.5 font-medium"></th>
                   </tr>
                 </thead>
@@ -1071,63 +1196,19 @@ function LeadsTab({
                     const vBadge = VERIFICATION_BADGE[l.verificationStatus] || VERIFICATION_BADGE.unverified;
                     return (
                       <tr key={l._id} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
-                        <td className="px-4 py-2.5 text-slate-800 dark:text-slate-200">{l.email}</td>
-                        <td className="px-4 py-2.5 text-slate-600 dark:text-slate-400">{l.phone || '—'}</td>
-                        <td className="px-4 py-2.5 text-slate-600 dark:text-slate-400">{l.businessName || l.firstName || '—'}</td>
-                        <td className="px-4 py-2.5 text-slate-600 dark:text-slate-400">{l.lastName || '—'}</td>
-                        <td className="px-4 py-2.5">
-                          <span title={l.verificationDetail || vBadge.label} className={cn('inline-flex items-center gap-1 font-medium', vBadge.tw)}>
-                            <vBadge.icon size={13} /> {vBadge.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-slate-600 dark:text-slate-400">{l.provider || '—'}</td>
-                        <td className="px-4 py-2.5">
-                          <span className={cn('badge', badge.tw)}>{badge.label}</span>
-                          {l.error && <span title={l.error}><AlertTriangle size={12} className="inline ml-1.5 text-red-400" /></span>}
-                        </td>
-                        <td className="px-4 py-2.5 text-center text-slate-600 dark:text-slate-400">
-                          <span
-                            title={formatOpenHistory(l) + (isHotLead(l) ? `\n🔥 Hot lead — ${HOT_OPEN_THRESHOLD}+ real opens` : '')}
-                            className={cn('inline-flex items-center gap-1', l.openCount ? 'underline decoration-dotted cursor-help' : '')}
+                        {cols.map((c) => (
+                          <td
+                            key={c.key}
+                            className={cn(
+                              'px-4 py-2.5',
+                              c.align === 'center' && 'text-center',
+                              c.key === 'response' && 'max-w-[160px] truncate',
+                              ['lastOpened', 'sent'].includes(c.key) && 'whitespace-nowrap',
+                            )}
                           >
-                            {l.openCount || 0}
-                            {isHotLead(l) && <Flame size={12} className="text-orange-500" />}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                          {l.openedAt ? new Date(l.openedAt).toLocaleString() : '—'}
-                        </td>
-                        <td className="px-4 py-2.5 text-center text-slate-600 dark:text-slate-400">{l.clickCount || 0}</td>
-                        <td className="px-4 py-2.5 text-center">
-                          {l.callRequested ? (
-                            <span
-                              title={l.callRequestedAt ? `Requested a call — ${new Date(l.callRequestedAt).toLocaleString()}` : 'Requested a call'}
-                              className="inline-flex items-center text-blue-600 dark:text-blue-400 cursor-help"
-                            >
-                              <PhoneCall size={13} />
-                            </span>
-                          ) : (
-                            <span className="text-slate-300 dark:text-slate-700">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5 max-w-[160px] truncate">
-                          {l.responseOption ? (
-                            <span
-                              title={l.respondedAt ? `${l.responseOption} — ${new Date(l.respondedAt).toLocaleString()}` : l.responseOption}
-                              className="inline-flex items-center gap-1 text-[12px] font-medium text-purple-600 dark:text-purple-400 cursor-help"
-                            >
-                              <MessageSquareText size={12} /> {l.responseOption}
-                            </span>
-                          ) : (
-                            <span className="text-slate-300 dark:text-slate-700">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                          {l.sentAt ? new Date(l.sentAt).toLocaleDateString() : '—'}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          {FOLLOW_UP_BADGE[l.followUpStatus] || null}
-                        </td>
+                            {renderLeadCell(c.key, l, { badge, vBadge })}
+                          </td>
+                        ))}
                         <td className="px-4 py-2.5">
                           <div className="flex items-center justify-end gap-1">
                             <button
@@ -1283,6 +1364,13 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
   const [includeUnsubscribeLink, setIncludeUnsubscribeLink] = useState(s.includeUnsubscribeLink ?? true);
   const [redirectUrl, setRedirectUrl] = useState(s.redirectUrl ?? '');
   const [responseOptions, setResponseOptions] = useState(s.responseOptions ?? []);
+  // Visible Leads-table columns. An empty saved list means "never configured",
+  // which renders the default set — so this initialises to the defaults rather
+  // than to empty, otherwise unticking everything and saving would be
+  // indistinguishable from never having touched it.
+  const [leadColumns, setLeadColumns] = useState(
+    Array.isArray(s.leadColumns) && s.leadColumns.length ? s.leadColumns : DEFAULT_LEAD_COLUMNS,
+  );
   const [textOnly, setTextOnly] = useState(s.textOnly ?? false);
   const [firstEmailTextOnly, setFirstEmailTextOnly] = useState(s.firstEmailTextOnly ?? false);
   const [dailyLimit, setDailyLimit] = useState(s.dailyLimit ?? 30);
@@ -1372,6 +1460,7 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
         sendingDays, timezone,
         followUpEnabled, followUpDelayHours: Number(followUpDelayHours) || 48,
         followUpSubject: followUpSubject.trim(), followUpBodyHtml,
+        leadColumns,
       });
     } finally {
       setSaving(false);
@@ -1491,6 +1580,52 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
           onChange={(e) => setDailyLimit(e.target.value)}
         />
         <p className="text-[11.5px] text-slate-500 dark:text-slate-400 mt-1">Max number of emails to send per day for this campaign</p>
+      </div>
+
+      <div className="card p-5 space-y-4">
+        <div>
+          <p className="text-[13.5px] font-semibold text-slate-800 dark:text-slate-200">Leads table columns</p>
+          <p className="text-[11.5px] text-slate-500 dark:text-slate-400 mt-0.5">
+            Choose what the Leads tab shows for this campaign. A plain mail-merge campaign can hide
+            Audit and anything else it doesn't use; an audit-driven one can keep it. Email and Status
+            are always shown.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-2 gap-x-4">
+          {LEAD_COLUMN_DEFS.map((c) => {
+            const on = c.always || leadColumns.includes(c.key);
+            return (
+              <label
+                key={c.key}
+                className={cn('flex items-center gap-2', c.always ? 'opacity-60 cursor-default' : 'cursor-pointer')}
+                title={c.always ? 'Always shown' : undefined}
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={c.always}
+                  onChange={(e) => setLeadColumns((prev) => (
+                    e.target.checked ? [...new Set([...prev, c.key])] : prev.filter((k) => k !== c.key)
+                  ))}
+                  className="rounded border-slate-300"
+                />
+                <span className="text-[12.5px] text-slate-600 dark:text-slate-400">
+                  {c.label}{c.key === 'audit' && <span className="text-slate-400"> (website audit)</span>}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2 pt-1">
+          <Button variant="outline" size="sm" onClick={() => setLeadColumns(DEFAULT_LEAD_COLUMNS)}>Show all</Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={() => setLeadColumns(['email', 'name', 'status', 'opens', 'clicks', 'sent'])}
+            title="A minimal set for a campaign that does not use website-audit data"
+          >
+            Essentials only
+          </Button>
+        </div>
       </div>
 
       <div className="card p-5 space-y-4">
