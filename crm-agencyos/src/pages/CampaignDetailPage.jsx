@@ -1732,7 +1732,7 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
           checked={fallbackEnabled}
           onChange={setFallbackEnabled}
           label="Standard email for leads without audit data"
-          description="Leads with no website, an unreachable site, or no audit results get this email instead of the audit one. Leave it off and the campaign refuses to start while any lead is missing the audit data your email uses."
+          description="Leads with no website, an unreachable site, no audit results, or a Skip-tier site (already in good shape) get this email instead of the audit one. Leave it off and the campaign refuses to start while any lead is missing the audit data your email uses."
         />
         {fallbackEnabled && (
           <div className="space-y-3 pt-1">

@@ -54,6 +54,12 @@ async function leadHasAuditGap(templates, leadId) {
   return !!(await CampaignLead.exists({ _id: leadId, ...filter }));
 }
 
+// A 'skip' prospect has a site that is already in good shape (that is what the
+// tier means), so an email built around "a few things stood out" would read
+// badly even when a minor finding exists. With the standard email switched on
+// they get it instead of the audit email.
+const isSkipTier = (lead) => lead?.auditSnapshot?.tier === 'skip';
+
 /**
  * Which subject/body to send this lead.
  *
@@ -71,6 +77,11 @@ async function chooseEmailContent(campaign, lead, { isFollowUp = false } = {}) {
     if (await leadHasAuditGap([subject, bodyHtml], lead._id)) {
       return { send: false, reason: 'follow-up uses website-audit tags this lead has no data for' };
     }
+    // A Skip-tier lead got the standard first email (below), so a follow-up
+    // quoting audit facts would contradict it.
+    if (fallbackUsable(campaign) && isSkipTier(lead) && auditTagsUsed([subject, bodyHtml]).length) {
+      return { send: false, reason: 'follow-up uses website-audit tags and this Skip-tier lead was sent the standard email' };
+    }
     return { send: true, variant: 'standard', subject, bodyHtml };
   }
 
@@ -78,7 +89,11 @@ async function chooseEmailContent(campaign, lead, { isFollowUp = false } = {}) {
   // Opt-in only. With it off this is exactly the previous behaviour — the
   // start/update/import gates are what keep gap leads out, as before.
   if (!fallbackUsable(campaign)) return standard;
-  if (!(await leadHasAuditGap([campaign.subject, campaign.bodyHtml], lead._id))) return standard;
+  // Only matters when the main email actually uses audit tags.
+  if (!auditTagsUsed([campaign.subject, campaign.bodyHtml]).length) return standard;
+  const standardForThisLead = isSkipTier(lead)
+    || await leadHasAuditGap([campaign.subject, campaign.bodyHtml], lead._id);
+  if (!standardForThisLead) return standard;
   return { send: true, variant: 'fallback', subject: s.fallbackSubject, bodyHtml: s.fallbackBodyHtml };
 }
 
@@ -88,5 +103,6 @@ module.exports = {
   fallbackProblem,
   fallbackUsable,
   leadHasAuditGap,
+  isSkipTier,
   chooseEmailContent,
 };
