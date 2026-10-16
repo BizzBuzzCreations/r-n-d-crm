@@ -589,7 +589,7 @@ const RichTextEditor = forwardRef(function RichTextEditor({ value, onChange, onU
   // us (e.g. loading a different campaign, or applying a saved template).
   useEffect(() => {
     if (!editor) return;
-    if (value !== editor.getHTML()) editor.commands.setContent(value || '', false);
+    if (value !== editor.getHTML()) editor.commands.setContent(value || '', { emitUpdate: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, editor]);
 
@@ -628,7 +628,7 @@ const RichTextEditor = forwardRef(function RichTextEditor({ value, onChange, onU
   const toggleSourceMode = () => {
     if (sourceMode) {
       // leaving source mode — push edited HTML back into the rich editor
-      editor.commands.setContent(sourceHtml || '', false);
+      editor.commands.setContent(sourceHtml || '', { emitUpdate: false });
       onChange(sourceHtml || '');
     }
     setSourceMode((s) => !s);
