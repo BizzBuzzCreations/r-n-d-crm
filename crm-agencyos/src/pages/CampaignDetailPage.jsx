@@ -847,6 +847,14 @@ function renderLeadCell(key, l, { badge, vBadge }) {
 
 // Compact tier badges for the Audit cell — the prospect-audit page has its own
 // fuller set; these are sized for a dense table row.
+// Mirrors backend utils/auditMergeTags.AUDIT_TAGS. Kept here only to give an
+// instant message in the Settings form; the server enforces the real rule.
+const FALLBACK_FORBIDDEN_TAGS = [
+  'top_finding', 'finding_2', 'finding_3', 'findings_list',
+  'perf_score', 'perf_desktop', 'seo_score', 'lcp_seconds', 'page_weight_mb',
+  'website', 'audit_tier',
+];
+
 const TIER_BADGE_SMALL = {
   hot:     { label: 'Hot',    tw: 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300' },
   high:    { label: 'High',   tw: 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400' },
@@ -1392,8 +1400,12 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
   const [followUpDelayHours, setFollowUpDelayHours] = useState(s.followUpDelayHours ?? 48);
   const [followUpSubject, setFollowUpSubject] = useState(s.followUpSubject ?? '');
   const [followUpBodyHtml, setFollowUpBodyHtml] = useState(s.followUpBodyHtml ?? '');
+  const [fallbackEnabled, setFallbackEnabled] = useState(s.fallbackEnabled ?? false);
+  const [fallbackSubject, setFallbackSubject] = useState(s.fallbackSubject ?? '');
+  const [fallbackBodyHtml, setFallbackBodyHtml] = useState(s.fallbackBodyHtml ?? '');
   const [saving, setSaving] = useState(false);
   const followUpEditorRef = useRef(null);
+  const fallbackEditorRef = useRef(null);
 
   useEffect(() => {
     setAccounts((s.accounts || []).map((a) => a._id || a));
@@ -1418,6 +1430,9 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
     setFollowUpDelayHours(s.followUpDelayHours ?? 48);
     setFollowUpSubject(s.followUpSubject ?? '');
     setFollowUpBodyHtml(s.followUpBodyHtml ?? '');
+    setFallbackEnabled(s.fallbackEnabled ?? false);
+    setFallbackSubject(s.fallbackSubject ?? '');
+    setFallbackBodyHtml(s.fallbackBodyHtml ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaign._id]);
 
@@ -1452,6 +1467,18 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
       toast.error('Follow-up subject and body are required while auto follow-up is on.');
       return;
     }
+    if (fallbackEnabled && (!fallbackSubject.trim() || !fallbackBodyHtml.trim())) {
+      toast.error('Add a subject and body for the standard email, or turn that option off.');
+      return;
+    }
+    // Same list the server enforces (utils/auditMergeTags.AUDIT_TAGS): the
+    // standard email goes to leads with NO audit data, so these would be blank.
+    const auditTagInFallback = FALLBACK_FORBIDDEN_TAGS.find((t) =>
+      new RegExp(`\\{\\{\\s*${t}\\s*\\}\\}`, 'i').test(`${fallbackSubject} ${fallbackBodyHtml}`));
+    if (fallbackEnabled && auditTagInFallback) {
+      toast.error(`The standard email can't use {{${auditTagInFallback}}} — those leads have no audit data.`);
+      return;
+    }
     setSaving(true);
     try {
       await onSave({
@@ -1466,6 +1493,7 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
         sendingDays, timezone,
         followUpEnabled, followUpDelayHours: Number(followUpDelayHours) || 48,
         followUpSubject: followUpSubject.trim(), followUpBodyHtml,
+        fallbackEnabled, fallbackSubject: fallbackSubject.trim(), fallbackBodyHtml,
         leadColumns,
       });
     } finally {
@@ -1693,6 +1721,52 @@ function SettingsTab({ campaign, emailAccounts, onSave, onManageAccounts }) {
               />
               <p className="text-[11.5px] text-slate-500 dark:text-slate-400 mt-1.5">
                 Sent through the same accounts, sending hours, and unsubscribe/tracking setup as the main email above — only the delay and content differ.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="card p-5 space-y-4">
+        <Toggle
+          checked={fallbackEnabled}
+          onChange={setFallbackEnabled}
+          label="Standard email for leads without audit data"
+          description="Leads with no website, an unreachable site, or no audit results get this email instead of the audit one. Leave it off and the campaign refuses to start while any lead is missing the audit data your email uses."
+        />
+        {fallbackEnabled && (
+          <div className="space-y-3 pt-1">
+            <Input
+              label="Standard email subject"
+              placeholder="e.g. A quick hello from BizzBuzzCreations"
+              value={fallbackSubject}
+              onChange={(e) => setFallbackSubject(e.target.value)}
+            />
+            <div>
+              <label className="form-label">Standard email body</label>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {['{{first_name}}', '{{last_name}}', '{{email}}', '{{redirect_url}}', '{{response_options}}'].map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => fallbackEditorRef.current?.insertText(tag)}
+                    className="text-[11px] font-mono px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+              <RichTextEditor
+                ref={fallbackEditorRef}
+                value={fallbackBodyHtml}
+                onChange={setFallbackBodyHtml}
+                onUploadImage={uploadCampaignImage}
+                placeholder="Hi {{first_name}}, a short email that doesn't rely on any website audit…"
+              />
+              <p className="text-[11.5px] text-slate-500 dark:text-slate-400 mt-1.5">
+                Don't use website-audit tags here ({'{{perf_score}}'}, {'{{top_finding}}'}, {'{{website}}'} …) — these leads have no audit data, so they'd be blank.
+                Prospects that couldn't be audited are added to this campaign when you push a batch, and receive this email.
+                An auto follow-up that uses audit tags is skipped for these leads.
               </p>
             </div>
           </div>

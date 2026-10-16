@@ -492,6 +492,12 @@ function SnippetPicker({ snippets, onSelect, onClose }) {
   );
 }
 
+// A stable reference: `|| []` inside the selector built a NEW array on every
+// store read whenever systemSettings was null (settings request failed) or had
+// no snippetLibrary, which zustand reads as "state changed" -> infinite render
+// loop -> blank page.
+const NO_SNIPPETS = [];
+
 const RichTextEditor = forwardRef(function RichTextEditor({ value, onChange, onUploadImage, placeholder }, ref) {
   const [showLinkPopover, setShowLinkPopover] = useState(false);
   const [showImagePopover, setShowImagePopover] = useState(false);
@@ -504,7 +510,7 @@ const RichTextEditor = forwardRef(function RichTextEditor({ value, onChange, onU
   // Kept fresh via effect below so SnippetExpander's getter (captured once,
   // at editor-creation time) always sees the current library, not whatever
   // it was when this component first mounted.
-  const snippetLibrary = useAppStore((s) => s.systemSettings?.snippetLibrary || []);
+  const snippetLibrary = useAppStore((s) => s.systemSettings?.snippetLibrary || NO_SNIPPETS);
   const snippetsRef = useRef(snippetLibrary);
   useEffect(() => { snippetsRef.current = snippetLibrary; }, [snippetLibrary]);
 

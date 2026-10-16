@@ -288,6 +288,7 @@ exports.pushToCampaign = async (req, res, next) => {
         skippedDuplicate: result.skippedDuplicate,
         skippedNoFindings: result.skippedNoFindings,
         skippedInvalidEmail: result.skippedInvalidEmail,
+        withoutAuditData: result.withoutAuditData,
         campaignId: result.campaignId,
         campaignName: result.campaignName,
       },

@@ -21,6 +21,7 @@ const EmailAccount = require('../models/EmailAccount');
 const { resolveIPv4 } = require('../utils/ipv4');
 const { escHtml, escHeader, stripToPlain } = require('../utils/emailRender');
 const { makeRenderer, followUpStillValid } = require('../utils/campaignRender');
+const { chooseEmailContent } = require('../utils/unauditedFallback');
 
 mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 8000 })
   .then(() => console.log('✅ MongoDB connected (campaign worker)'))
@@ -209,6 +210,23 @@ const worker = new Worker('campaign-queue', async (job) => {
     return { skipped: true };
   }
 
+  // Which subject/body this lead gets. Decided BEFORE the lead is marked
+  // 'sending' so a skip leaves nothing half-done. For the first email this
+  // only ever picks between the audit email and the opt-in standard email;
+  // a follow-up that needs audit data the lead lacks is skipped.
+  const content = await chooseEmailContent(campaign, lead, { isFollowUp });
+  if (!content.send) {
+    log(`Job ${job.id} — lead ${lead.email}: ${content.reason}, skipping follow-up`);
+    // 'failed', NOT 'none': the follow-up dispatcher selects status 'sent' +
+    // followUpStatus 'none', so resetting to 'none' would re-queue this lead
+    // every minute forever.
+    lead.followUpStatus = 'failed';
+    lead.followUpAccountUsed = null;
+    lead.followUpError = `Skipped: ${content.reason}`;
+    await lead.save();
+    return { skipped: true, reason: 'follow_up_needs_audit_data' };
+  }
+
   const accountId = isFollowUp ? lead.followUpAccountUsed : lead.accountUsed;
   const account = await EmailAccount.findById(accountId).select('+smtpPassEncrypted');
   if (!account) {
@@ -225,8 +243,8 @@ const worker = new Worker('campaign-queue', async (job) => {
   if (isFollowUp) lead.followUpStatus = 'sending'; else lead.status = 'sending';
   await lead.save();
 
-  const subject = renderMergeTags(isFollowUp ? campaign.settings.followUpSubject : campaign.subject, lead, campaign.settings.responseOptions, 'header');
-  let html = renderMergeTags(isFollowUp ? campaign.settings.followUpBodyHtml : campaign.bodyHtml, lead, campaign.settings.responseOptions);
+  const subject = renderMergeTags(content.subject, lead, campaign.settings.responseOptions, 'header');
+  let html = renderMergeTags(content.bodyHtml, lead, campaign.settings.responseOptions);
   // Opt-out toggle, defaults true — see Campaign.js for why this isn't
   // off by default. `unsubUrl` stays null (not just an unused string) when
   // disabled so spamSafeHeaders() below can tell there's truly no

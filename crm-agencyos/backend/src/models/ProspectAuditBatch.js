@@ -49,6 +49,9 @@ const ProspectAuditBatchSchema = new mongoose.Schema({
     // Prospects the eligibility query excluded: failed crawls, blank emails,
     // or a tier filter. Recorded so created + skipped* adds up to totalInBatch.
     skippedNotEligible: { type: Number, default: null },
+    // Pushed without audit data (standard-email fallback on): they will get the
+    // standard email rather than the audit one.
+    withoutAuditData:   { type: Number, default: null },
     totalInBatch:       { type: Number, default: null },
     campaignId:          { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign', default: null },
     campaignName:        { type: String, default: '' },
