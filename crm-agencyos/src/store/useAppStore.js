@@ -1268,7 +1268,8 @@ const useAppStore = create((set, get, store) => ({
         r.skippedDuplicate ? `${r.skippedDuplicate} already in the campaign` : '',
         r.skippedNoFindings ? `${r.skippedNoFindings} with no audit findings` : '',
       ].filter(Boolean).join(', ');
-      toast.success(`${r.created} lead${r.created === 1 ? '' : 's'} added to "${r.campaignName}"${extra ? ` — skipped ${extra}` : ''}`);
+      const standard = r.withoutAuditData ? ` (${r.withoutAuditData} without audit data — they'll get the standard email)` : '';
+      toast.success(`${r.created} lead${r.created === 1 ? '' : 's'} added to "${r.campaignName}"${standard}${extra ? ` — skipped ${extra}` : ''}`);
       return r;
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to push prospects to campaign');

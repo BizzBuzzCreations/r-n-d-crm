@@ -1,6 +1,7 @@
 'use strict';
 const CampaignLead = require('../models/CampaignLead');
 const { auditTagsUsed, missingAuditDataFilter } = require('./auditMergeTags');
+const { fallbackEnabled, fallbackProblem } = require('./unauditedFallback');
 
 // The templates a campaign would actually send, for audit-tag purposes. The
 // follow-up pair only counts when the follow-up is switched on — an unused
@@ -37,6 +38,16 @@ async function checkAuditTagData(campaign) {
   const missingFilter = missingAuditDataFilter(templates);
   if (!missingFilter) return { ready: true, reason: '' };
 
+  // Standard-email fallback switched on: leads without audit data are not a
+  // problem, they get the standard email at send time (see
+  // utils/unauditedFallback.js). What IS a problem is a standard email that
+  // can't be sent — blank, or itself using audit tags, which those very leads
+  // can't fill.
+  if (fallbackEnabled(campaign)) {
+    const problem = fallbackProblem(campaign);
+    return problem ? { ready: false, reason: problem } : { ready: true, reason: '' };
+  }
+
   const [pendingCount, missing] = await Promise.all([
     CampaignLead.countDocuments({ campaign: campaign._id, status: 'pending' }),
     CampaignLead.countDocuments({ campaign: campaign._id, status: 'pending', ...missingFilter }),
@@ -50,7 +61,8 @@ async function checkAuditTagData(campaign) {
   return {
     ready: false,
     reason: `${missing} of ${pendingCount} pending leads are missing the website-audit data this email needs (${tags}). `
-      + `Push leads in from a Prospect Audit batch, re-crawl the ones whose PageSpeed pass failed, or remove those tags.`,
+      + `Push leads in from a Prospect Audit batch, re-crawl the ones whose PageSpeed pass failed, remove those tags, `
+      + `or turn on "Standard email for leads without audit data" in Settings.`,
   };
 }
 

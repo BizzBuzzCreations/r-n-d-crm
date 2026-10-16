@@ -11,6 +11,7 @@ const { effectiveDailyLimit } = require('../utils/warmup');
 const { isWithinSendingWindow } = require('../utils/sendingWindow');
 const { checkCampaignReady, checkAuditTagData, sendableTemplates } = require('../utils/campaignReadiness');
 const { auditTagsUsed } = require('../utils/auditMergeTags');
+const { fallbackEnabled, fallbackProblem, fallbackUsable } = require('../utils/unauditedFallback');
 const { syncCampaignLeadToPipeline } = require('../utils/leadPipelineSync');
 const notifService = require('../services/notificationService');
 const { notifyMainCrm } = require('../utils/mainCrmNotify');
@@ -112,6 +113,14 @@ exports.updateCampaign = async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Daily Limit must be at least 1' });
       }
       campaign.settings = { ...campaign.settings.toObject(), ...settings };
+    }
+
+    // A standard email that can't actually be sent (blank, or using audit tags
+    // the very leads it targets can't fill) is refused whatever the campaign's
+    // status — it is a settings error, not a "still being written" state.
+    if (fallbackEnabled(campaign)) {
+      const problem = fallbackProblem(campaign);
+      if (problem) return res.status(400).json({ success: false, message: problem });
     }
 
     // The audit-data gate only runs on start/schedule, which left two ways to
@@ -482,12 +491,15 @@ exports.importLeads = async (req, res, next) => {
     // unrestricted — the full start gate catches those before a single send.
     if (['active', 'scheduled'].includes(campaign.status)) {
       const tags = auditTagsUsed(sendableTemplates(campaign));
-      if (tags.length) {
+      // With the standard-email fallback on, a lead with no audit data is
+      // fine — it is sent the standard email, not the audit one.
+      if (tags.length && !fallbackUsable(campaign)) {
         return res.status(400).json({
           success: false,
           message: `This campaign is ${campaign.status} and its email uses website-audit tags (${tags.map((t) => `{{${t}}}`).join(', ')}). `
             + `Imported leads have no audit data, so they would send with those blank. `
-            + `Pause the campaign first, or add leads by pushing them from a Prospect Audit batch instead.`,
+            + `Pause the campaign first, add leads by pushing them from a Prospect Audit batch instead, `
+            + `or turn on "Standard email for leads without audit data" in Settings.`,
         });
       }
     }

@@ -57,6 +57,16 @@ const CampaignSettingsSchema = new mongoose.Schema({
   followUpDelayHours: { type: Number, default: 48 }, // hours after going hot before it sends
   followUpSubject:    { type: String, default: '' },
   followUpBodyHtml:   { type: String, default: '' }, // same {{firstName}} merge-tag syntax as the main email
+
+  // Standard email for leads that have no website-audit data (no website,
+  // dead/blocked site, a PageSpeed pass that failed, or a CSV-imported lead).
+  // Off by default: with it off, a campaign whose email uses audit tags still
+  // refuses to start while any pending lead lacks that data — unchanged.
+  // When on, those leads get THIS subject/body instead, and the audit email
+  // goes only to leads that really have the data. See utils/unauditedFallback.js.
+  fallbackEnabled:    { type: Boolean, default: false },
+  fallbackSubject:    { type: String, default: '' },
+  fallbackBodyHtml:   { type: String, default: '' }, // must not use website-audit tags
 }, { _id: false });
 
 const CampaignSchema = new mongoose.Schema({

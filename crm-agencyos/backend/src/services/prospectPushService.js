@@ -18,6 +18,7 @@ const CampaignLead = require('../models/CampaignLead');
 const ProspectAuditBatch = require('../models/ProspectAuditBatch');
 const User = require('../models/User');
 const { userHasFeature } = require('../middleware/authorizeFeature');
+const { fallbackUsable, UNAUDITED_CRAWL_STATUSES } = require('../utils/unauditedFallback');
 
 // Logger is optional so this module can be required by a probe with no
 // logging side effects, and so a missing sysLogger never breaks a push.
@@ -53,15 +54,25 @@ async function pushProspectsToCampaign({ batch, campaignId, tiers, minOpportunit
     return fail(400, 'campaign_not_editable', `Campaign is ${campaign.status}. Pause it before pushing new leads in.`);
   }
 
-  const query = { batch: batch._id, crawlStatus: 'ok', email: { $nin: ['', null] } };
+  // With the standard-email fallback on, prospects that could not be audited
+  // (no website, dead/blocked/timed-out site) are pushed too — they will be
+  // sent the standard email instead of being silently dropped. 'pending' and
+  // 'crawling' are never included: they may still gain audit data.
+  const includeUnaudited = fallbackUsable(campaign);
+  const query = {
+    batch: batch._id,
+    crawlStatus: includeUnaudited ? { $in: ['ok', ...UNAUDITED_CRAWL_STATUSES] } : 'ok',
+    email: { $nin: ['', null] },
+  };
   if (Array.isArray(tiers) && tiers.length) query.tier = { $in: tiers.map(String) };
   if (minOpportunity != null && Number.isFinite(Number(minOpportunity))) {
     query.opportunityScore = { $gte: Number(minOpportunity) };
   }
 
-  // Only 'ok' crawls are eligible (the query above): a dead/blocked/timeout
-  // prospect has no measured findings, and buildFindings returns [] for it, so
-  // a partially-crawled batch contributes only the prospects actually audited.
+  // Only 'ok' crawls are eligible unless the standard-email fallback is on
+  // (the query above): a dead/blocked/timeout prospect has no measured
+  // findings, and buildFindings returns [] for it, so a partially-crawled batch
+  // contributes only the prospects actually audited.
   const prospects = await ProspectAudit.find(query).lean();
 
   // Everything the query filtered out — failed crawls, blank emails, or a
@@ -88,7 +99,9 @@ async function pushProspectsToCampaign({ batch, campaignId, tiers, minOpportunit
   for (const p of prospects) {
     const email = String(p.email || '').trim().toLowerCase();
     if (!EMAIL_RE.test(email) || seen.has(email)) { skippedInvalidEmail++; continue; }
-    if (requireFindings && !(p.findings || []).length) { skippedNoFindings++; continue; }
+    // With the fallback on, "nothing to say" is not a reason to drop the
+    // prospect — it simply gets the standard email.
+    if (requireFindings && !includeUnaudited && !(p.findings || []).length) { skippedNoFindings++; continue; }
     seen.add(email);
     candidates.push({ p, email });
   }
@@ -106,8 +119,11 @@ async function pushProspectsToCampaign({ batch, campaignId, tiers, minOpportunit
   ).lean();
   const existingSet = new Set(existing.map((e) => e.email));
 
-  const toInsert = candidates
-    .filter((c) => !existingSet.has(c.email))
+  const fresh = candidates.filter((c) => !existingSet.has(c.email));
+  // How many of the new leads have no audit data and will therefore be sent
+  // the standard email (always 0 when the fallback is off).
+  const withoutAuditData = fresh.filter(({ p }) => p.crawlStatus !== 'ok' || !(p.findings || []).length).length;
+  const toInsert = fresh
     .map(({ p, email }) => ({
       campaign: campaign._id,
       email,
@@ -169,6 +185,7 @@ async function pushProspectsToCampaign({ batch, campaignId, tiers, minOpportunit
     skippedNoFindings,
     skippedInvalidEmail,
     skippedNotEligible,
+    withoutAuditData,
     totalInBatch,
     campaignId: String(campaign._id),
     campaignName: campaign.name,
@@ -246,6 +263,7 @@ async function autoPushCompletedBatch(batch) {
       skippedNoFindings: result.skippedNoFindings,
       skippedInvalidEmail: result.skippedInvalidEmail,
       skippedNotEligible: result.skippedNotEligible,
+      withoutAuditData: result.withoutAuditData,
       totalInBatch: result.totalInBatch,
       campaignId: result.campaignId,
       campaignName: result.campaignName,

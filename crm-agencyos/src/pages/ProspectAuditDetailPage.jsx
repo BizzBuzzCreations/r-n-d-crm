@@ -640,6 +640,8 @@ export default function ProspectAuditDetailPage() {
               {batch.autoPushResult.status === 'pushed'
                 ? `added ${batch.autoPushResult.created} lead(s) to "${batch.autoPushResult.campaignName}"`
                   + ` — of ${batch.autoPushResult.totalInBatch ?? '?'} in the batch,`
+                  + (batch.autoPushResult.withoutAuditData
+                    ? ` ${batch.autoPushResult.withoutAuditData} without audit data (sent the standard email),` : '')
                   + ` ${batch.autoPushResult.skippedNotEligible ?? 0} not audited/no email,`
                   + ` ${batch.autoPushResult.skippedDuplicate ?? 0} already in the campaign`
                 : `${batch.autoPushResult.status} — ${batch.autoPushResult.reason}`}
