@@ -251,6 +251,12 @@ function downloadProspectsCSV(prospects, filename) {
   URL.revokeObjectURL(url);
 }
 
+// Every tier a prospect can land in; the push windows offer all of them.
+const PUSH_TIERS = ['hot', 'high', 'medium', 'low', 'skip', 'no_site'];
+// Final, non-'ok' crawl outcomes — mirrors UNAUDITED_CRAWL_STATUSES in
+// backend/src/utils/unauditedFallback.js. 'pending'/'crawling' are NOT here.
+const UNAUDITED_CRAWL_STATUSES = ['dead', 'blocked', 'timeout', 'no_url'];
+
 export default function ProspectAuditDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -345,13 +351,41 @@ export default function ProspectAuditDetailPage() {
     return s;
   }, [prospects]);
 
-  // Mirrors the backend's own filter in pushToCampaign: crawled OK, has an
-  // email, and has at least one finding to personalise with.
-  const isPushable = (p) => p.crawlStatus === 'ok' && !!p.email && (p.findings || []).length > 0;
-  const pushableCount = useMemo(() => prospects.filter(isPushable).length, [prospects]);
+  // Mirrors the backend's own filter in services/prospectPushService.js.
+  // Default: crawled OK, has an email, and has at least one finding to
+  // personalise with. When the chosen campaign has the "standard email for leads
+  // without audit data" setting ON, every prospect with an email is pushed —
+  // including ones that could not be audited (no website, dead/blocked/timed
+  // out) — except those still being crawled, which may yet gain data.
+  const pushCampaign = campaigns.find((c) => String(c._id) === String(pushCampaignId));
+  const pushFallback = pushCampaign?.settings?.fallbackEnabled === true;
+  const hasAuditData = (p) => p.crawlStatus === 'ok' && (p.findings || []).length > 0;
+  const isPushable = (p, withFallback = false) => {
+    if (!p.email) return false;
+    if (withFallback) return p.crawlStatus === 'ok' || UNAUDITED_CRAWL_STATUSES.includes(p.crawlStatus);
+    return hasAuditData(p);
+  };
+  // Enables the header button: anything with an email that is no longer being
+  // crawled. Whether it is actually pushed depends on the chosen campaign's
+  // standard-email setting, which is only known once one is picked in the window.
+  const pushableCount = useMemo(() => prospects.filter((p) => isPushable(p, true)).length, [prospects]);
+  const inPushTiers = (p) => !pushTiers.length || pushTiers.includes(p.tier);
   const pushSelectedCount = useMemo(
-    () => prospects.filter((p) => isPushable(p) && (!pushTiers.length || pushTiers.includes(p.tier))).length,
-    [prospects, pushTiers],
+    () => prospects.filter((p) => isPushable(p, pushFallback) && inPushTiers(p)).length,
+    [prospects, pushTiers, pushFallback], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  // Of those, how many get the standard email: no audit data, or the Skip tier
+  // (sites already in good shape — see utils/unauditedFallback.js isSkipTier).
+  const pushStandardCount = useMemo(
+    () => (pushFallback
+      ? prospects.filter((p) => isPushable(p, true) && inPushTiers(p) && (!hasAuditData(p) || p.tier === 'skip')).length
+      : 0),
+    [prospects, pushTiers, pushFallback], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  // Prospects in the chosen tiers that WOULD be added if the standard email were on.
+  const pushHeldBackCount = useMemo(
+    () => (pushFallback ? 0 : prospects.filter((p) => isPushable(p, true) && !isPushable(p) && inPushTiers(p)).length),
+    [prospects, pushTiers, pushFallback], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const filtered = tierFilter === 'all' ? prospects : prospects.filter((p) => p.tier === tierFilter);
@@ -389,8 +423,8 @@ export default function ProspectAuditDetailPage() {
             disabled={!pushableCount}
             onClick={() => { loadCampaigns(); setShowPush(true); }}
             title={pushableCount
-              ? `${pushableCount} audited prospect(s) with an email address and at least one finding`
-              : 'No audited prospects with an email address and findings yet'}
+              ? `${pushableCount} prospect(s) with an email address that can be pushed`
+              : 'No crawled prospects with an email address yet'}
           >
             <Send size={14} /> Push to Campaign
           </Button>
@@ -580,9 +614,16 @@ export default function ProspectAuditDetailPage() {
           </div>
 
           <div>
-            <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Tiers to include</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-[12px] font-semibold text-slate-600 dark:text-slate-300">Tiers to include</label>
+              <span className="text-[12px] text-slate-500">
+                <button type="button" className="underline hover:text-slate-700" onClick={() => setPushTiers([...PUSH_TIERS])}>Select all</button>
+                {' · '}
+                <button type="button" className="underline hover:text-slate-700" onClick={() => setPushTiers([])}>Clear</button>
+              </span>
+            </div>
             <div className="flex flex-wrap gap-2">
-              {['hot', 'high', 'medium', 'low'].map((t) => (
+              {PUSH_TIERS.map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -602,7 +643,22 @@ export default function ProspectAuditDetailPage() {
 
           <div className="text-[13px] text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/50 rounded-lg px-3 py-2">
             <strong>{pushSelectedCount}</strong> prospect{pushSelectedCount === 1 ? '' : 's'} will be added.
-            Prospects with no email address, no audit findings, or already in the campaign are skipped.
+            {pushFallback ? (
+              <>
+                {' '}{pushStandardCount > 0 && <><strong>{pushStandardCount}</strong> of them will get the campaign's standard email (no audit data, or Skip tier — sites already in good shape). </>}
+                Prospects with no email address, still being crawled, or already in the campaign are skipped.
+              </>
+            ) : (
+              <>
+                {' '}Prospects with no email address, no audit findings, or already in the campaign are skipped.
+                {pushHeldBackCount > 0 && (
+                  <span className="block mt-1 text-amber-600 dark:text-amber-400">
+                    {pushHeldBackCount} more in these tiers have no audit data. To include them, turn on "Standard email for leads
+                    without audit data" in that campaign's Settings, then reopen this window.
+                  </span>
+                )}
+              </>
+            )}
           </div>
 
           <div className="flex items-center justify-end gap-2 pt-1">
@@ -693,7 +749,7 @@ export default function ProspectAuditDetailPage() {
           <div>
             <label className="block text-[12px] font-semibold mb-1.5 text-slate-600 dark:text-slate-300">Tiers to include</label>
             <div className="flex flex-wrap gap-2">
-              {['hot', 'high', 'medium', 'low'].map((tr) => (
+              {PUSH_TIERS.map((tr) => (
                 <button key={tr} type="button"
                   onClick={() => setAutoTiers((prev) => prev.includes(tr) ? prev.filter((x) => x !== tr) : [...prev, tr])}
                   className={cn('px-2.5 py-1 rounded-full text-[12px] font-semibold border transition-colors',
